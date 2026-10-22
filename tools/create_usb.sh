@@ -1,133 +1,115 @@
 #!/bin/bash
 #
-# PS5 Hackintosh — Prepare USB boot drive
+# PS5 Hackintosh — Preparar USB de arranque
 #
-# Creates the USB directory structure needed for the PS5 Hackintosh loader.
-# The user must provide their own macOS disk image and OVMF firmware.
+# Crea la estructura completa del USB que el ps5-linux-loader leerá.
+# El loader busca bzImage e initrd.img en /mnt/usb[0-3]/ o /PS5/Linux/
 #
-# Usage: ./tools/create_usb.sh /Volumes/PS5_HACK
+# Uso: ./tools/create_usb.sh /Volumes/PS5HACK
 #
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+BUILD="$PROJECT_DIR/build"
 
-USB_ROOT="${1:-}"
+USB="${1:-}"
 
-if [ -z "$USB_ROOT" ]; then
-    echo "Usage: $0 <usb-mount-point>"
+if [ -z "$USB" ]; then
+    echo "Uso: $0 <punto-de-montaje-USB>"
     echo ""
-    echo "Example: $0 /Volumes/PS5_HACK"
+    echo "Ejemplo: $0 /Volumes/PS5HACK"
     echo ""
-    echo "The USB drive should be formatted as FAT32 or exFAT."
+    echo "El USB debe estar formateado como FAT32 o exFAT."
     exit 1
 fi
 
-if [ ! -d "$USB_ROOT" ]; then
-    echo "Error: $USB_ROOT is not a directory"
-    exit 1
-fi
+[ ! -d "$USB" ] && { echo "Error: $USB no es un directorio"; exit 1; }
 
-echo "╔══════════════════════════════════════════════╗"
-echo "║  PS5 Hackintosh — USB Drive Preparation     ║"
-echo "╚══════════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════════╗"
+echo "║  PS5 Hackintosh — Preparación del USB           ║"
+echo "╚══════════════════════════════════════════════════╝"
 echo ""
-echo "Target: $USB_ROOT"
+echo "Destino: $USB"
 echo ""
 
-# ── Create directory structure ─────────────────────
-echo "Creating directory structure..."
-mkdir -p "$USB_ROOT/macos/EFI/OC/ACPI"
-mkdir -p "$USB_ROOT/macos/EFI/OC/Drivers"
-mkdir -p "$USB_ROOT/macos/EFI/OC/Kexts"
-mkdir -p "$USB_ROOT/macos/EFI/BOOT"
+# ── Estructura del USB ─────────────────────────────────
+# El loader busca en /mnt/usb[N]/ y /mnt/usb[N]/PS5/Linux/
+# Ponemos todo en la raíz para máxima compatibilidad.
+mkdir -p "$USB/macos/EFI/OC/ACPI"
+mkdir -p "$USB/macos/EFI/OC/Drivers"
+mkdir -p "$USB/macos/EFI/OC/Kexts"
+mkdir -p "$USB/macos/EFI/BOOT"
 
-# ── Copy boot files ───────────────────────────────
-echo "Copying boot files..."
-
-# bzImage and initramfs (must be built separately)
-if [ -f "$PROJECT_DIR/build/bzImage" ]; then
-    cp "$PROJECT_DIR/build/bzImage" "$USB_ROOT/bzImage"
-    echo "  ✓ bzImage"
+# ── bzImage ────────────────────────────────────────────
+if [ -f "$BUILD/bzImage" ]; then
+    cp "$BUILD/bzImage" "$USB/bzImage"
+    echo "  ✓ bzImage copiado ($(du -h "$BUILD/bzImage" | cut -f1))"
 else
-    echo "  ✗ bzImage (not found — build the kernel first)"
+    echo "  ✗ bzImage NO ENCONTRADO"
+    echo "    Necesitas un kernel Linux con KVM habilitado para PS5."
+    echo "    Ver: kernel/README.md"
 fi
 
-if [ -f "$PROJECT_DIR/build/initramfs.cpio.gz" ]; then
-    cp "$PROJECT_DIR/build/initramfs.cpio.gz" "$USB_ROOT/initramfs.cpio.gz"
-    echo "  ✓ initramfs.cpio.gz"
+# ── initrd.img ─────────────────────────────────────────
+if [ -f "$BUILD/initrd.img" ]; then
+    cp "$BUILD/initrd.img" "$USB/initrd.img"
+    echo "  ✓ initrd.img copiado ($(du -h "$BUILD/initrd.img" | cut -f1))"
 else
-    echo "  ✗ initramfs.cpio.gz (run: make initramfs)"
+    echo "  ✗ initrd.img NO ENCONTRADO — ejecuta: make initramfs"
 fi
 
-# ── Copy OpenCore config ─────────────────────────
-echo "Copying OpenCore configuration..."
-cp "$PROJECT_DIR/opencore/config.plist" "$USB_ROOT/macos/EFI/OC/config.plist"
-echo "  ✓ config.plist"
+# ── cmdline.txt ────────────────────────────────────────
+cp "$PROJECT_DIR/usb/cmdline.txt" "$USB/cmdline.txt"
+echo "  ✓ cmdline.txt (con flags KVM/VFIO)"
 
-# Copy ACPI tables (compiled .aml files)
-for aml in "$PROJECT_DIR/opencore/ACPI/"*.aml; do
-    if [ -f "$aml" ]; then
-        cp "$aml" "$USB_ROOT/macos/EFI/OC/ACPI/"
-        echo "  ✓ $(basename "$aml")"
-    fi
-done
+# ── vram.txt ───────────────────────────────────────────
+cp "$PROJECT_DIR/usb/vram.txt" "$USB/vram.txt" 2>/dev/null && \
+    echo "  ✓ vram.txt" || true
 
-# ── Write cmdline ─────────────────────────────────
-cat > "$USB_ROOT/cmdline.txt" << 'EOF'
-console=tty0 earlyprintk=ttyS0,115200 root=/dev/ram0 rdinit=/init amdgpu.dpm=0 amdgpu.runpm=0 amdgpu.force_1080p=1 video=DP-1:1920x1080@60 iommu=pt amd_iommu=on kvm_amd.nested=1 default_hugepagesz=2M hugepages=4096 ps5_hackintosh=1
-EOF
-echo "  ✓ cmdline.txt"
+# ── OpenCore config ────────────────────────────────────
+cp "$PROJECT_DIR/opencore/config.plist" "$USB/macos/EFI/OC/config.plist"
+echo "  ✓ config.plist (OpenCore para PS5)"
 
-# ── Report status ─────────────────────────────────
+# ── ACPI compiladas ────────────────────────────────────
+if ls "$BUILD/acpi/"*.aml 1>/dev/null 2>&1; then
+    cp "$BUILD/acpi/"*.aml "$USB/macos/EFI/OC/ACPI/"
+    echo "  ✓ Tablas ACPI compiladas"
+else
+    echo "  ✗ Tablas ACPI no compiladas — ejecuta: make acpi"
+fi
+
+# ── OVMF ───────────────────────────────────────────────
+if [ -f "$BUILD/bin/OVMF_CODE.fd" ]; then
+    cp "$BUILD/bin/OVMF_CODE.fd" "$USB/macos/OVMF_CODE.fd"
+    echo "  ✓ OVMF_CODE.fd"
+else
+    echo "  ✗ OVMF no encontrado — ejecuta: ./tools/fetch_binaries.sh"
+fi
+
 echo ""
-echo "═══════════════════════════════════════════════"
+echo "═══════════════════════════════════════════════════"
 echo ""
-echo "USB structure created. You still need to provide:"
+echo "Todavía necesitas añadir manualmente:"
 echo ""
-echo "  1. macOS disk image:"
-echo "     $USB_ROOT/macos/macOS.img"
-echo "     (Create with: qemu-img create -f raw macOS.img 64G)"
-echo "     (Install macOS into it using a Mac or VM first)"
+echo "  1. macOS disk image → $USB/macos/macOS.img"
+echo "     Crea con: qemu-img create -f raw macOS.img 64G"
+echo "     Instala macOS usando un Mac o VM primero."
 echo ""
-echo "  2. OVMF UEFI firmware:"
-echo "     $USB_ROOT/macos/OVMF_CODE.fd"
-echo "     (Download from: https://github.com/kholia/OSX-KVM)"
+echo "  2. OpenCore.img → $USB/macos/OpenCore.img"
+echo "     Crea con: ./tools/build_opencore_img.sh <dir-EFI> OpenCore.img"
 echo ""
-echo "  3. OpenCore bootloader image:"
-echo "     $USB_ROOT/macos/OpenCore.img"
-echo "     (Create with the OpenCore offline installer)"
+echo "  3. Kexts en EFI/OC/Kexts/:"
+echo "     Lilu, VirtualSMC, WhateverGreen, AppleALC, NVMeFix,"
+echo "     AMDRyzenCPUPowerManagement, SMCAMDProcessor, RestrictEvents"
 echo ""
-echo "  4. Required kexts in EFI/OC/Kexts/:"
-echo "     - Lilu.kext"
-echo "     - VirtualSMC.kext"
-echo "     - WhateverGreen.kext"
-echo "     - AppleALC.kext"
-echo "     - NVMeFix.kext"
-echo "     - AMDRyzenCPUPowerManagement.kext"
-echo "     - SMCAMDProcessor.kext"
-echo "     - RestrictEvents.kext"
+echo "  4. Drivers en EFI/OC/Drivers/:"
+echo "     OpenHfsPlus.efi, OpenRuntime.efi, OpenUsbKbDxe.efi"
 echo ""
-echo "  5. OpenCore drivers in EFI/OC/Drivers/:"
-echo "     - OpenHfsPlus.efi"
-echo "     - OpenRuntime.efi"
-echo "     - OpenUsbKbDxe.efi"
-echo "     - ResetNvramEntry.efi"
+echo "  5. Bootloader en EFI/BOOT/:"
+echo "     BOOTx64.efi, OpenCore.efi"
 echo ""
-echo "  6. OpenCore bootloader:"
-echo "     $USB_ROOT/macos/EFI/BOOT/BOOTx64.efi"
-echo "     $USB_ROOT/macos/EFI/OC/OpenCore.efi"
+echo "  6. Seriales SMBIOS (GenSMBIOS → config.plist)"
 echo ""
-echo "  7. Generate SMBIOS serials with GenSMBIOS and"
-echo "     update config.plist (MLB, ROM, Serial, UUID)"
-echo ""
-echo "  8. Compile ACPI tables:"
-echo "     cd $PROJECT_DIR/opencore/ACPI"
-echo "     iasl -tc DSDT-PS5.dsl"
-echo "     iasl -tc SSDT-PS5-CPU.dsl"
-echo "     iasl -tc SSDT-PS5-GPU.dsl"
-echo "     iasl -tc SSDT-PS5-USB.dsl"
-echo "     cp *.aml $USB_ROOT/macos/EFI/OC/ACPI/"
-echo ""
-echo "═══════════════════════════════════════════════"
+echo "═══════════════════════════════════════════════════"

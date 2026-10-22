@@ -1,0 +1,1 @@
+root=/dev/ram0 rw rdinit=/init console=tty0 console=ttyTitania0 video=DP-1:1920x1080@60 amdgpu.force_1080p=1 mitigations=off idle=halt pci=pcie_bus_perf iommu=pt amd_iommu=on kvm_amd.nested=1 default_hugepagesz=2M hugepages=4096 ps5_hackintosh=1

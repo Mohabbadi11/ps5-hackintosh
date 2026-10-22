@@ -1,92 +1,84 @@
 #!/bin/sh
 #
-# PS5 Hackintosh — initramfs init
+# PS5 Hackintosh — initramfs init (PID 1)
 #
-# This runs as PID 1 after the Linux kernel boots on the PS5.
-# It initializes hardware and launches QEMU/KVM with OpenCore → macOS.
-# The user sees macOS boot directly on their TV — no Linux UI.
+# Este script se ejecuta al arrancar Linux en la PS5.
+# Monta el USB, localiza el rootfs o la imagen de macOS,
+# y lanza QEMU/KVM con OpenCore para bootear macOS.
+#
+# El usuario ve macOS directamente en su TV — nada de Linux.
 
-set -e
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 
-# ── Mount virtual filesystems ──────────────────────────
 mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
-mkdir -p /dev/pts /dev/shm
+mkdir -p /dev/pts /dev/shm /tmp
 mount -t devpts   devpts   /dev/pts
 mount -t tmpfs    tmpfs    /dev/shm
 mount -t tmpfs    tmpfs    /tmp
 
-# ── Console output (visible on HDMI) ──────────────────
 exec > /dev/console 2>&1
 clear
 
-cat << 'BOOT'
- ╔══════════════════════════════════════════════╗
- ║       PS5 Hackintosh Loader v1.0            ║
- ║       Booting macOS...                      ║
- ╚══════════════════════════════════════════════╝
-BOOT
+echo ""
+echo " ╔══════════════════════════════════════════════╗"
+echo " ║         PS5 Hackintosh Loader v1.0           ║"
+echo " ║         Arrancando macOS...                  ║"
+echo " ╚══════════════════════════════════════════════╝"
+echo ""
 
-# ── Load kernel modules ───────────────────────────────
-echo "[hackintosh] Loading kernel modules..."
+# ── Cargar módulos del kernel ──────────────────────────
+echo "[hackintosh] Cargando módulos..."
+for mod in kvm kvm_amd vfio vfio-pci vfio-iommu-type1 \
+           virtio virtio_blk virtio_net virtio_scsi \
+           loop usb_storage amdgpu snd_hda_intel; do
+    modprobe -q $mod 2>/dev/null
+done
 
-modprobe -q kvm 2>/dev/null || true
-modprobe -q kvm_amd nested=1 2>/dev/null || true
-modprobe -q vfio 2>/dev/null || true
-modprobe -q vfio-pci 2>/dev/null || true
-modprobe -q vfio-iommu-type1 2>/dev/null || true
-modprobe -q virtio 2>/dev/null || true
-modprobe -q virtio_blk 2>/dev/null || true
-modprobe -q virtio_net 2>/dev/null || true
-modprobe -q virtio_scsi 2>/dev/null || true
-modprobe -q loop 2>/dev/null || true
-modprobe -q usb_storage 2>/dev/null || true
-modprobe -q amdgpu 2>/dev/null || true
-modprobe -q snd_hda_intel 2>/dev/null || true
-
-# ── Wait for USB devices ──────────────────────────────
-echo "[hackintosh] Waiting for USB storage..."
+# ── Esperar dispositivos USB ───────────────────────────
+echo "[hackintosh] Esperando almacenamiento USB..."
 sleep 3
 
-# ── Mount USB drive ───────────────────────────────────
+# ── Buscar y montar USB con el directorio macos/ ──────
 USB_DEV=""
-for dev in /dev/sd[a-z]1 /dev/sd[a-z] /dev/nvme0n1p1; do
-    if [ -b "$dev" ]; then
-        mount -t vfat "$dev" /mnt/usb 2>/dev/null && {
+mkdir -p /mnt/usb
+
+for dev in /dev/sd[a-z]1 /dev/sd[a-z]2 /dev/sd[a-z] \
+           /dev/nvme0n1p1 /dev/nvme0n1p2; do
+    [ -b "$dev" ] || continue
+
+    for fs in vfat exfat ext4; do
+        if mount -t $fs "$dev" /mnt/usb 2>/dev/null; then
             if [ -d /mnt/usb/macos ]; then
                 USB_DEV="$dev"
-                break
+                echo "[hackintosh] USB montado: $dev ($fs)"
+                break 2
             fi
-            umount /mnt/usb
-        }
-        mount -t exfat "$dev" /mnt/usb 2>/dev/null && {
-            if [ -d /mnt/usb/macos ]; then
-                USB_DEV="$dev"
-                break
-            fi
-            umount /mnt/usb
-        }
-    fi
+            umount /mnt/usb 2>/dev/null
+        fi
+    done
 done
 
 if [ -z "$USB_DEV" ]; then
-    echo "[hackintosh] ERROR: No USB drive found with macos/ directory!"
-    echo "[hackintosh] Please insert USB with:"
-    echo "  /macos/macOS.img    — macOS disk image"
-    echo "  /macos/EFI/         — OpenCore EFI directory"
-    echo "  /macos/OVMF_CODE.fd — UEFI firmware"
     echo ""
-    echo "[hackintosh] Dropping to shell..."
+    echo "[hackintosh] ERROR: No se encontró USB con directorio macos/"
+    echo ""
+    echo "  El USB debe contener:"
+    echo "    /macos/macOS.img      — imagen de disco de macOS"
+    echo "    /macos/OVMF_CODE.fd   — firmware UEFI"
+    echo "    /macos/OpenCore.img   — imagen del bootloader OpenCore"
+    echo ""
+    echo "  Opcional:"
+    echo "    /macos/EFI/           — OpenCore EFI (alternativa a imagen)"
+    echo ""
+    echo "[hackintosh] Abriendo shell de emergencia..."
     exec /bin/sh
 fi
 
-echo "[hackintosh] USB mounted from $USB_DEV"
-
-# ── Validate required files ───────────────────────────
+# ── Verificar archivos necesarios ──────────────────────
 MACOS_IMG="/mnt/usb/macos/macOS.img"
 OVMF_CODE="/mnt/usb/macos/OVMF_CODE.fd"
-OVMF_VARS="/mnt/usb/macos/OVMF_VARS.fd"
 OC_IMG="/mnt/usb/macos/OpenCore.img"
 
 missing=""
@@ -94,27 +86,25 @@ missing=""
 [ ! -f "$OVMF_CODE" ] && missing="$missing OVMF_CODE.fd"
 
 if [ -n "$missing" ]; then
-    echo "[hackintosh] ERROR: Missing files on USB:$missing"
-    echo "[hackintosh] Dropping to shell..."
+    echo "[hackintosh] ERROR: Faltan archivos:$missing"
+    echo "[hackintosh] Abriendo shell..."
     exec /bin/sh
 fi
 
-# Create OVMF_VARS if missing (writable NVRAM store)
+# ── Crear OVMF_VARS si no existe ──────────────────────
+OVMF_VARS="/mnt/usb/macos/OVMF_VARS.fd"
 if [ ! -f "$OVMF_VARS" ]; then
-    cp "$OVMF_CODE" "$OVMF_VARS" 2>/dev/null || true
+    echo "[hackintosh] Creando NVRAM store..."
+    cp "$OVMF_CODE" /tmp/OVMF_VARS.fd
+    OVMF_VARS="/tmp/OVMF_VARS.fd"
 fi
 
-# ── Configure hugepages for KVM ───────────────────────
-echo "[hackintosh] Configuring memory..."
+# ── Hugepages para KVM ────────────────────────────────
+echo "[hackintosh] Configurando memoria..."
 echo 4096 > /proc/sys/vm/nr_hugepages 2>/dev/null || true
 mkdir -p /dev/hugepages
 mount -t hugetlbfs hugetlbfs /dev/hugepages 2>/dev/null || true
 
-# ── GPU passthrough setup ─────────────────────────────
-echo "[hackintosh] Configuring GPU passthrough..."
-/scripts/boot-macos.sh "$MACOS_IMG" "$OVMF_CODE" "$OVMF_VARS" "$OC_IMG"
-
-# Should not reach here
-echo "[hackintosh] macOS session ended."
-echo "[hackintosh] Press POWER to restart the PS5."
-exec /bin/sh
+# ── Lanzar macOS ──────────────────────────────────────
+echo "[hackintosh] Lanzando macOS..."
+exec /scripts/boot-macos.sh "$MACOS_IMG" "$OVMF_CODE" "$OVMF_VARS" "$OC_IMG"

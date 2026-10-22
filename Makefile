@@ -1,119 +1,115 @@
-# PS5 Hackintosh Loader
-# Boots macOS on PlayStation 5 via modified Linux loader chain
-# Copyright (C) 2026 - GPL-3.0-or-later
+# PS5 Hackintosh — Build system
+#
+# Uses ps5-linux-loader (upstream) for the exploit chain.
+# Our project adds: custom cmdline (KVM/VFIO), initramfs (macOS boot),
+# OpenCore config, and USB preparation tools.
+#
+# The loader reads bzImage + initrd.img + cmdline.txt from USB — we just
+# provide the right files, and the upstream exploit does the rest.
 
 -include .env
 
-PS5_PAYLOAD_SDK ?= /Users/rodrigo/.local/ps5-payload-sdk
-include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
-
-# ── Toolchain ──────────────────────────────────────────────────────
-HOSTCC       := clang
-HOSTLD       := ld.lld
-NASM         := nasm
-
-# ── Build paths ────────────────────────────────────────────────────
-BUILD        := build
-BIN          := $(BUILD)/bin
-OBJ          := $(BUILD)/obj
-SHELLCODE    := $(BUILD)/shellcode
-INITRAMFS_D  := $(BUILD)/initramfs
-PKG_OUT      := $(BUILD)/pkg
-
-# ── Firmware target (13.60) ────────────────────────────────────────
-FW_VERSION   := 0x1360
 PS5_HOST     ?= 192.168.1.91
 FTP_PORT     ?= 2121
+BUILD        := build
+LOADER_DIR   := third_party/ps5-linux-loader
+INITRAMFS_D  := $(BUILD)/initramfs_root
 
-# ── Source files ───────────────────────────────────────────────────
-SRC          := $(wildcard src/*.c)
-OBJ_FILES    := $(SRC:src/%.c=$(OBJ)/%.o)
+.PHONY: all clean loader initramfs usb deploy acpi
 
-SHELLCODE_HV_SRC  := $(wildcard shellcode/hv/*.c)
-SHELLCODE_KRN_SRC := $(wildcard shellcode/kernel/*.c)
-SHELLCODE_AP_SRC  := shellcode/ap/entry.S shellcode/ap/main.c
+all: loader initramfs
 
-# ── Compiler flags ─────────────────────────────────────────────────
-CFLAGS := -std=c23 -Wall -Wextra -Werror \
-          -Iinclude -Ishellcode/hv -Ishellcode/kernel \
-          -DFW_VERSION=$(FW_VERSION) \
-          -O2 -fno-stack-protector
+# ── Upstream loader (builds the ELF that goes to the PS5) ──────────
+loader:
+	$(MAKE) -C $(LOADER_DIR)
+	@mkdir -p $(BUILD)/bin
+	cp $(LOADER_DIR)/bin/ps5-linux-loader.elf $(BUILD)/bin/
+	@echo "Loader built: $(BUILD)/bin/ps5-linux-loader.elf"
 
-SCFLAGS := -std=c23 -Wall -ffreestanding -fno-stack-protector \
-           -fno-builtin -nostdlib -O2 -fPIC \
-           -Iinclude -DFW_VERSION=$(FW_VERSION)
+# ── Custom initramfs for macOS boot ────────────────────────────────
+# Contains: busybox, QEMU (static), KVM modules, boot scripts, OpenCore
+initramfs: $(BUILD)/initrd.img
+$(BUILD)/initrd.img: initramfs/init initramfs/scripts/boot-macos.sh
+	@echo "Building Hackintosh initramfs..."
+	@mkdir -p $(INITRAMFS_D)/{bin,sbin,dev,proc,sys,mnt/usb,mnt/macos,etc,tmp,scripts,lib/modules}
 
-LDFLAGS := -nostdlib
-
-# ── Targets ────────────────────────────────────────────────────────
-.PHONY: all clean deploy initramfs pkg
-
-all: $(BIN)/ps5-hackintosh.elf
-
-# ── Shellcode blobs → C headers ────────────────────────────────────
-$(SHELLCODE)/shellcode_hv.bin: $(SHELLCODE_HV_SRC) shellcode/hv/linker.ld
-	@mkdir -p $(@D)
-	$(HOSTCC) $(SCFLAGS) -c shellcode/hv/main.c -o $(SHELLCODE)/hv_main.o
-	$(HOSTLD) -T shellcode/hv/linker.ld -o $@ $(SHELLCODE)/hv_main.o
-
-$(SHELLCODE)/shellcode_kernel.bin: $(SHELLCODE_KRN_SRC) shellcode/kernel/linker.ld
-	@mkdir -p $(@D)
-	$(HOSTCC) $(SCFLAGS) -c shellcode/kernel/main.c -o $(SHELLCODE)/krn_main.o
-	$(HOSTLD) -T shellcode/kernel/linker.ld -o $@ $(SHELLCODE)/krn_main.o
-
-$(SHELLCODE)/shellcode_ap.bin: $(SHELLCODE_AP_SRC) shellcode/ap/linker.ld
-	@mkdir -p $(@D)
-	$(NASM) -f elf64 shellcode/ap/entry.S -o $(SHELLCODE)/ap_entry.o
-	$(HOSTCC) $(SCFLAGS) -c shellcode/ap/main.c -o $(SHELLCODE)/ap_main.o
-	$(HOSTLD) -T shellcode/ap/linker.ld -o $@ $(SHELLCODE)/ap_entry.o $(SHELLCODE)/ap_main.o
-
-include/shellcode_hv.h: $(SHELLCODE)/shellcode_hv.bin
-	xxd -i $< > $@
-
-include/shellcode_kernel.h: $(SHELLCODE)/shellcode_kernel.bin
-	xxd -i $< > $@
-
-include/shellcode_ap.h: $(SHELLCODE)/shellcode_ap.bin
-	xxd -i $< > $@
-
-SHELLCODE_HEADERS := include/shellcode_hv.h include/shellcode_kernel.h include/shellcode_ap.h
-
-# ── Main ELF ───────────────────────────────────────────────────────
-$(OBJ)/%.o: src/%.c $(SHELLCODE_HEADERS)
-	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BIN)/ps5-hackintosh.elf: $(OBJ_FILES)
-	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -o $@ $^
-
-# ── Initramfs ──────────────────────────────────────────────────────
-initramfs: $(BUILD)/initramfs.cpio.gz
-$(BUILD)/initramfs.cpio.gz: initramfs/init initramfs/scripts/boot-macos.sh
-	@mkdir -p $(INITRAMFS_D)/{bin,sbin,dev,proc,sys,mnt/usb,mnt/macos,etc,tmp,scripts}
+	# Core scripts
 	cp initramfs/init $(INITRAMFS_D)/init
 	chmod +x $(INITRAMFS_D)/init
 	cp initramfs/scripts/*.sh $(INITRAMFS_D)/scripts/
 	chmod +x $(INITRAMFS_D)/scripts/*.sh
 	cp initramfs/etc/* $(INITRAMFS_D)/etc/ 2>/dev/null || true
-	cd $(INITRAMFS_D) && find . | cpio -o -H newc | gzip > ../initramfs.cpio.gz
 
-# ── PKG (fPKG for PS5) ────────────────────────────────────────────
-pkg: $(BIN)/ps5-hackintosh.elf
-	@mkdir -p $(PKG_OUT)/sce_sys
-	cp $(BIN)/ps5-hackintosh.elf $(PKG_OUT)/eboot.bin
-	cp sce_sys/param.json $(PKG_OUT)/sce_sys/
-	cp sce_sys/icon0.png $(PKG_OUT)/sce_sys/ 2>/dev/null || true
-	@echo "PKG contents ready in $(PKG_OUT)/"
-	@echo "Use prospero-pkg or PkgTool to create the .pkg file"
+	# Check for required binaries
+	@if [ ! -f $(BUILD)/bin/busybox ]; then \
+		echo ""; \
+		echo "WARNING: $(BUILD)/bin/busybox not found."; \
+		echo "Run: ./tools/fetch_binaries.sh"; \
+		echo ""; \
+	else \
+		cp $(BUILD)/bin/busybox $(INITRAMFS_D)/bin/busybox; \
+		chmod +x $(INITRAMFS_D)/bin/busybox; \
+		cd $(INITRAMFS_D)/bin && for cmd in sh ls cat mount umount mkdir cp mv rm \
+			modprobe insmod lsmod mknod sleep echo clear grep sed awk \
+			dmesg ifconfig ip route; do \
+			ln -sf busybox $$cmd; \
+		done; \
+		cd $(INITRAMFS_D)/sbin && for cmd in modprobe insmod; do \
+			ln -sf ../bin/busybox $$cmd; \
+		done; \
+	fi
 
-# ── Deploy ─────────────────────────────────────────────────────────
-deploy: $(BIN)/ps5-hackintosh.elf
-	socat -t 99999999 - TCP:$(PS5_HOST):9021 < $<
+	@if [ ! -f $(BUILD)/bin/qemu-system-x86_64 ]; then \
+		echo ""; \
+		echo "WARNING: $(BUILD)/bin/qemu-system-x86_64 not found."; \
+		echo "Run: ./tools/fetch_binaries.sh"; \
+		echo ""; \
+	else \
+		cp $(BUILD)/bin/qemu-system-x86_64 $(INITRAMFS_D)/bin/; \
+		chmod +x $(INITRAMFS_D)/bin/qemu-system-x86_64; \
+	fi
 
-deploy-ftp: $(BIN)/ps5-hackintosh.elf
-	curl -T $< ftp://$(PS5_HOST):$(FTP_PORT)/data/hackintosh/eboot.bin
+	# Build cpio archive
+	cd $(INITRAMFS_D) && find . | cpio -o -H newc 2>/dev/null | gzip > $(CURDIR)/$(BUILD)/initrd.img
+	@echo "Initramfs built: $(BUILD)/initrd.img ($(shell du -h $(BUILD)/initrd.img 2>/dev/null | cut -f1))"
+
+# ── Compile ACPI tables ────────────────────────────────────────────
+acpi:
+	@command -v iasl >/dev/null 2>&1 || { echo "iasl not found. Install: brew install acpica"; exit 1; }
+	@mkdir -p $(BUILD)/acpi
+	cd opencore/ACPI && for dsl in *.dsl; do \
+		iasl -tc "$$dsl" && mv "$${dsl%.dsl}.aml" $(CURDIR)/$(BUILD)/acpi/; \
+	done
+	@echo "ACPI tables compiled in $(BUILD)/acpi/"
+
+# ── Prepare USB drive contents ─────────────────────────────────────
+usb: initramfs acpi
+	@mkdir -p $(BUILD)/usb/macos/EFI/OC/{ACPI,Drivers,Kexts}
+	@mkdir -p $(BUILD)/usb/macos/EFI/BOOT
+
+	# Kernel + initramfs (bzImage must be provided separately)
+	@if [ -f $(BUILD)/bzImage ]; then cp $(BUILD)/bzImage $(BUILD)/usb/; fi
+	cp $(BUILD)/initrd.img $(BUILD)/usb/initrd.img
+
+	# Cmdline
+	cp usb/cmdline.txt $(BUILD)/usb/cmdline.txt
+	cp usb/vram.txt $(BUILD)/usb/vram.txt 2>/dev/null || true
+
+	# OpenCore config + ACPI
+	cp opencore/config.plist $(BUILD)/usb/macos/EFI/OC/config.plist
+	cp $(BUILD)/acpi/*.aml $(BUILD)/usb/macos/EFI/OC/ACPI/ 2>/dev/null || true
+
+	@echo ""
+	@echo "USB contents ready in $(BUILD)/usb/"
+	@echo "Copy to your FAT32/exFAT USB drive."
+
+# ── Deploy loader to PS5 ──────────────────────────────────────────
+deploy: loader
+	@echo "Sending loader to $(PS5_HOST):9021..."
+	socat -t 99999999 - TCP:$(PS5_HOST):9021 < $(BUILD)/bin/ps5-linux-loader.elf
+	@echo "Sent. PS5 will enter rest mode, then boot into macOS on wake."
 
 # ── Clean ──────────────────────────────────────────────────────────
 clean:
-	rm -rf $(BUILD) include/shellcode_*.h
+	rm -rf $(BUILD)
+	$(MAKE) -C $(LOADER_DIR) clean 2>/dev/null || true
