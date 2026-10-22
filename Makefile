@@ -15,6 +15,9 @@ BUILD        := build
 LOADER_DIR   := third_party/ps5-linux-loader
 INITRAMFS_D  := $(BUILD)/initramfs_root
 
+export PS5_PAYLOAD_SDK ?= /Users/rodrigo/.local/ps5-payload-sdk
+export LLVM_CONFIG     ?= /opt/homebrew/opt/llvm@18/bin/llvm-config
+
 .PHONY: all clean loader initramfs rootfs usb deploy acpi
 
 all: loader initramfs

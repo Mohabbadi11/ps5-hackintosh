@@ -81,7 +81,10 @@ docker run --rm --platform linux/amd64 \
         bridge-utils
 
     echo "Preparando rootfs..."
-    mkdir -p /rootfs/{bin,sbin,usr/bin,usr/sbin,lib,lib64,etc,dev,proc,sys,tmp,run,var,mnt/macos,hackintosh}
+    mkdir -p /rootfs/bin /rootfs/sbin /rootfs/usr/bin /rootfs/usr/sbin \
+             /rootfs/usr/lib /rootfs/usr/share /rootfs/lib /rootfs/lib64 \
+             /rootfs/etc /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/tmp \
+             /rootfs/run /rootfs/var /rootfs/mnt/macos /rootfs/hackintosh
 
     # Copiar QEMU y dependencias
     cp /usr/bin/qemu-system-x86_64 /rootfs/usr/bin/
