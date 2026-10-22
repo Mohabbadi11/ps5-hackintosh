@@ -16,6 +16,7 @@ BUILD="$PROJECT_DIR/build"
 MACOS_IMG="$BUILD/macOS.img"
 RECOVERY_IMG="$BUILD/macOS-recovery.img"
 OC_IMG="$BUILD/OpenCore.img"
+OC_DIR="$BUILD/opencore"
 OVMF_CODE="$BUILD/OVMF_CODE.fd"
 OVMF_VARS="$BUILD/OVMF_VARS.fd"
 OVMF_VARS_TMP="/tmp/ps5-hackintosh-OVMF_VARS.fd"
@@ -27,7 +28,7 @@ echo ""
 
 # ── Verificar artefactos ──────────────────────────────
 MISSING=""
-[ ! -f "$OC_IMG" ]      && MISSING="$MISSING OpenCore.img"
+[ ! -d "$OC_DIR/EFI" ]  && MISSING="$MISSING opencore/EFI"
 [ ! -f "$OVMF_CODE" ]   && MISSING="$MISSING OVMF_CODE.fd"
 [ ! -f "$OVMF_VARS" ]   && MISSING="$MISSING OVMF_VARS.fd"
 [ ! -f "$MACOS_IMG" ]    && MISSING="$MISSING macOS.img"
@@ -72,8 +73,8 @@ QEMU_ARGS=(
     -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
     -drive "if=pflash,format=raw,file=$OVMF_VARS_TMP"
 
-    # OpenCore (disco de boot)
-    -drive "id=OpenCore,if=none,format=qcow2,file=$OC_IMG"
+    # OpenCore (disco de boot — directorio virtual FAT)
+    -drive "id=OpenCore,if=none,format=raw,file=fat:rw:$OC_DIR"
     -device ide-hd,bus=sata.0,drive=OpenCore,bootindex=1
 
     # Disco macOS
