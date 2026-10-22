@@ -1,0 +1,14 @@
+build/
+.deps/
+.env
+*.o
+*.bin
+*.elf
+*.aml
+include/shellcode_*.h
+third_party/cache/
+tools/__pycache__/
+.DS_Store
+*.img
+*.qcow2
+*.fd
