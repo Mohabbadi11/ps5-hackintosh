@@ -43,17 +43,15 @@ cp "$OVMF_VARS" "$OVMF_VARS_TMP"
 
 # ── Determinar aceleración ────────────────────────────
 ACCEL=""
-if [ "$(uname -m)" = "arm64" ]; then
-    # macOS ARM — usamos HVF (Hypervisor.framework)
-    ACCEL="-accel hvf -cpu host"
-    CPU_MODEL="host"
-    echo "  Aceleración: HVF (Apple Silicon)"
-elif [ "$(uname -m)" = "x86_64" ]; then
+if [ "$(uname -m)" = "x86_64" ] && qemu-system-x86_64 -accel help 2>&1 | grep -q hvf; then
     ACCEL="-accel hvf -cpu Penryn,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,vendor=GenuineIntel"
-    echo "  Aceleración: HVF (Intel)"
+    echo "  Aceleración: HVF (Intel Mac — rápido)"
 else
-    ACCEL="-accel tcg -cpu Penryn,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,vendor=GenuineIntel"
-    echo "  Aceleración: TCG (emulación, será lento)"
+    # Apple Silicon o sin HVF: TCG (emulación software)
+    # macOS se instala más lento pero funciona
+    ACCEL="-accel tcg,thread=multi -cpu Penryn,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,vendor=GenuineIntel"
+    echo "  Aceleración: TCG (emulación x86 — la instalación será lenta)"
+    echo "  Nota: en PS5 usará KVM nativo, esto es solo para preparar la imagen"
 fi
 
 echo "  macOS.img:    $MACOS_IMG"
@@ -66,6 +64,9 @@ QEMU_ARGS=(
     $ACCEL
     -smp 4,cores=4,threads=1
     -m 8G
+
+    # Controlador SATA (AHCI)
+    -device ich9-ahci,id=sata
 
     # UEFI firmware
     -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
@@ -92,9 +93,7 @@ QEMU_ARGS=(
     -device usb-kbd
     -device usb-tablet
 
-    # Audio (opcional)
-    -device ich9-intel-hda
-    -device hda-duplex
+    # Sin audio (no necesario para instalación)
 )
 
 # Añadir recovery si existe
