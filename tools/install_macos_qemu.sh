@@ -15,27 +15,34 @@ BUILD="$PROJECT_DIR/build"
 
 MACOS_IMG="$BUILD/macOS.img"
 RECOVERY_IMG="$BUILD/macOS-recovery.img"
-OC_IMG="$BUILD/OpenCore.img"
-OC_DIR="$BUILD/opencore"
+OC_QCOW2="$BUILD/OpenCore-OSX-KVM.qcow2"
 OVMF_CODE="$BUILD/OVMF_CODE.fd"
 OVMF_VARS="$BUILD/OVMF_VARS.fd"
 OVMF_VARS_TMP="/tmp/ps5-hackintosh-OVMF_VARS.fd"
+
+OC_URL="https://github.com/kholia/OSX-KVM/raw/master/OpenCore/OpenCore.qcow2"
 
 echo "╔══════════════════════════════════════════════╗"
 echo "║  PS5 Hackintosh — Instalar macOS (QEMU)     ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
 
+# ── Descargar OpenCore para QEMU si no existe ─────────
+if [ ! -f "$OC_QCOW2" ]; then
+    echo "  Descargando OpenCore (OSX-KVM) para QEMU..."
+    curl -L -o "$OC_QCOW2" "$OC_URL"
+    echo "  OpenCore descargado: $(du -h "$OC_QCOW2" | cut -f1)"
+fi
+
 # ── Verificar artefactos ──────────────────────────────
 MISSING=""
-[ ! -d "$OC_DIR/EFI" ]  && MISSING="$MISSING opencore/EFI"
 [ ! -f "$OVMF_CODE" ]   && MISSING="$MISSING OVMF_CODE.fd"
 [ ! -f "$OVMF_VARS" ]   && MISSING="$MISSING OVMF_VARS.fd"
 [ ! -f "$MACOS_IMG" ]    && MISSING="$MISSING macOS.img"
 
 if [ -n "$MISSING" ]; then
     echo "Faltan:$MISSING"
-    echo "Ejecuta primero: ./tools/create_macos_img.sh"
+    echo "Ejecuta primero: ./tools/fetch_binaries.sh && ./tools/create_macos_img.sh"
     exit 1
 fi
 
@@ -48,15 +55,13 @@ if [ "$(uname -m)" = "x86_64" ] && qemu-system-x86_64 -accel help 2>&1 | grep -q
     ACCEL="-accel hvf -cpu Penryn,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,vendor=GenuineIntel"
     echo "  Aceleración: HVF (Intel Mac — rápido)"
 else
-    # Apple Silicon o sin HVF: TCG (emulación software)
-    # macOS se instala más lento pero funciona
     ACCEL="-accel tcg,thread=multi -cpu Penryn,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,vendor=GenuineIntel"
     echo "  Aceleración: TCG (emulación x86 — la instalación será lenta)"
     echo "  Nota: en PS5 usará KVM nativo, esto es solo para preparar la imagen"
 fi
 
 echo "  macOS.img:    $MACOS_IMG"
-echo "  OpenCore:     $OC_IMG"
+echo "  OpenCore:     $OC_QCOW2"
 echo ""
 
 # ── Construir argumentos QEMU ─────────────────────────
@@ -73,8 +78,8 @@ QEMU_ARGS=(
     -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
     -drive "if=pflash,format=raw,file=$OVMF_VARS_TMP"
 
-    # OpenCore (disco de boot — directorio virtual FAT)
-    -drive "id=OpenCore,if=none,format=raw,file=fat:rw:$OC_DIR"
+    # OpenCore (imagen pre-construida de OSX-KVM)
+    -drive "id=OpenCore,if=none,snapshot=on,format=qcow2,file=$OC_QCOW2"
     -device ide-hd,bus=sata.0,drive=OpenCore,bootindex=1
 
     # Disco macOS
@@ -93,8 +98,6 @@ QEMU_ARGS=(
     -device qemu-xhci
     -device usb-kbd
     -device usb-tablet
-
-    # Sin audio (no necesario para instalación)
 )
 
 # Añadir recovery si existe
