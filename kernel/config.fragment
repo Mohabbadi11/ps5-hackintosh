@@ -1,0 +1,85 @@
+# PS5 Hackintosh — Linux kernel config fragment
+#
+# Apply on top of a ps5-linux defconfig:
+#   cd linux-src
+#   make defconfig
+#   scripts/kconfig/merge_config.sh .config /path/to/config.fragment
+#   make -j$(nproc)
+#
+# These options enable KVM, VFIO (GPU passthrough), and virtio
+# so that QEMU can boot macOS with hardware acceleration.
+
+# ── KVM (AMD-V on Zen 2) ─────────────────────────────
+CONFIG_VIRTUALIZATION=y
+CONFIG_KVM=y
+CONFIG_KVM_AMD=y
+CONFIG_KVM_AMD_SEV=n
+
+# ── VFIO (GPU passthrough) ───────────────────────────
+CONFIG_VFIO=y
+CONFIG_VFIO_PCI=y
+CONFIG_VFIO_IOMMU_TYPE1=y
+CONFIG_VFIO_VIRQFD=y
+CONFIG_VFIO_MDEV=n
+
+# ── IOMMU ─────────────────────────────────────────────
+CONFIG_IOMMU_SUPPORT=y
+CONFIG_AMD_IOMMU=y
+CONFIG_AMD_IOMMU_V2=y
+CONFIG_IOMMU_DEFAULT_PASSTHROUGH=y
+
+# ── virtio (disk, net, GPU for QEMU) ─────────────────
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VIRTIO_SCSI=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_VIRTIO_INPUT=y
+CONFIG_DRM_VIRTIO_GPU=y
+
+# ── Hugepages (KVM performance) ──────────────────────
+CONFIG_HUGETLBFS=y
+CONFIG_HUGETLB_PAGE=y
+CONFIG_TRANSPARENT_HUGEPAGE=y
+
+# ── AMD GPU (host driver before passthrough) ─────────
+CONFIG_DRM=y
+CONFIG_DRM_AMDGPU=y
+CONFIG_DRM_AMDGPU_SI=n
+CONFIG_DRM_AMDGPU_CIK=n
+
+# ── USB ───────────────────────────────────────────────
+CONFIG_USB=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_STORAGE=y
+CONFIG_USB_HID=y
+
+# ── Filesystem (USB mount) ───────────────────────────
+CONFIG_VFAT_FS=y
+CONFIG_EXFAT_FS=y
+CONFIG_NLS_CODEPAGE_437=y
+CONFIG_NLS_ISO8859_1=y
+CONFIG_NLS_UTF8=y
+
+# ── Network ───────────────────────────────────────────
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_TUN=y
+CONFIG_BRIDGE=y
+CONFIG_NETFILTER=y
+
+# ── Loop device (disk images) ────────────────────────
+CONFIG_BLK_DEV_LOOP=y
+CONFIG_BLK_DEV_NBD=y
+
+# ── initramfs ─────────────────────────────────────────
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_BLK_DEV_RAM=y
+CONFIG_BLK_DEV_RAM_COUNT=16
+CONFIG_BLK_DEV_RAM_SIZE=65536
+
+# ── cgroups (QEMU memory management) ─────────────────
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+CONFIG_CGROUP_DEVICE=y

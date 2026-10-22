@@ -1,0 +1,120 @@
+#!/bin/sh
+#
+# PS5 Hackintosh — initramfs init
+#
+# This runs as PID 1 after the Linux kernel boots on the PS5.
+# It initializes hardware and launches QEMU/KVM with OpenCore → macOS.
+# The user sees macOS boot directly on their TV — no Linux UI.
+
+set -e
+
+# ── Mount virtual filesystems ──────────────────────────
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /dev/shm
+mount -t devpts   devpts   /dev/pts
+mount -t tmpfs    tmpfs    /dev/shm
+mount -t tmpfs    tmpfs    /tmp
+
+# ── Console output (visible on HDMI) ──────────────────
+exec > /dev/console 2>&1
+clear
+
+cat << 'BOOT'
+ ╔══════════════════════════════════════════════╗
+ ║       PS5 Hackintosh Loader v1.0            ║
+ ║       Booting macOS...                      ║
+ ╚══════════════════════════════════════════════╝
+BOOT
+
+# ── Load kernel modules ───────────────────────────────
+echo "[hackintosh] Loading kernel modules..."
+
+modprobe -q kvm 2>/dev/null || true
+modprobe -q kvm_amd nested=1 2>/dev/null || true
+modprobe -q vfio 2>/dev/null || true
+modprobe -q vfio-pci 2>/dev/null || true
+modprobe -q vfio-iommu-type1 2>/dev/null || true
+modprobe -q virtio 2>/dev/null || true
+modprobe -q virtio_blk 2>/dev/null || true
+modprobe -q virtio_net 2>/dev/null || true
+modprobe -q virtio_scsi 2>/dev/null || true
+modprobe -q loop 2>/dev/null || true
+modprobe -q usb_storage 2>/dev/null || true
+modprobe -q amdgpu 2>/dev/null || true
+modprobe -q snd_hda_intel 2>/dev/null || true
+
+# ── Wait for USB devices ──────────────────────────────
+echo "[hackintosh] Waiting for USB storage..."
+sleep 3
+
+# ── Mount USB drive ───────────────────────────────────
+USB_DEV=""
+for dev in /dev/sd[a-z]1 /dev/sd[a-z] /dev/nvme0n1p1; do
+    if [ -b "$dev" ]; then
+        mount -t vfat "$dev" /mnt/usb 2>/dev/null && {
+            if [ -d /mnt/usb/macos ]; then
+                USB_DEV="$dev"
+                break
+            fi
+            umount /mnt/usb
+        }
+        mount -t exfat "$dev" /mnt/usb 2>/dev/null && {
+            if [ -d /mnt/usb/macos ]; then
+                USB_DEV="$dev"
+                break
+            fi
+            umount /mnt/usb
+        }
+    fi
+done
+
+if [ -z "$USB_DEV" ]; then
+    echo "[hackintosh] ERROR: No USB drive found with macos/ directory!"
+    echo "[hackintosh] Please insert USB with:"
+    echo "  /macos/macOS.img    — macOS disk image"
+    echo "  /macos/EFI/         — OpenCore EFI directory"
+    echo "  /macos/OVMF_CODE.fd — UEFI firmware"
+    echo ""
+    echo "[hackintosh] Dropping to shell..."
+    exec /bin/sh
+fi
+
+echo "[hackintosh] USB mounted from $USB_DEV"
+
+# ── Validate required files ───────────────────────────
+MACOS_IMG="/mnt/usb/macos/macOS.img"
+OVMF_CODE="/mnt/usb/macos/OVMF_CODE.fd"
+OVMF_VARS="/mnt/usb/macos/OVMF_VARS.fd"
+OC_IMG="/mnt/usb/macos/OpenCore.img"
+
+missing=""
+[ ! -f "$MACOS_IMG" ] && missing="$missing macOS.img"
+[ ! -f "$OVMF_CODE" ] && missing="$missing OVMF_CODE.fd"
+
+if [ -n "$missing" ]; then
+    echo "[hackintosh] ERROR: Missing files on USB:$missing"
+    echo "[hackintosh] Dropping to shell..."
+    exec /bin/sh
+fi
+
+# Create OVMF_VARS if missing (writable NVRAM store)
+if [ ! -f "$OVMF_VARS" ]; then
+    cp "$OVMF_CODE" "$OVMF_VARS" 2>/dev/null || true
+fi
+
+# ── Configure hugepages for KVM ───────────────────────
+echo "[hackintosh] Configuring memory..."
+echo 4096 > /proc/sys/vm/nr_hugepages 2>/dev/null || true
+mkdir -p /dev/hugepages
+mount -t hugetlbfs hugetlbfs /dev/hugepages 2>/dev/null || true
+
+# ── GPU passthrough setup ─────────────────────────────
+echo "[hackintosh] Configuring GPU passthrough..."
+/scripts/boot-macos.sh "$MACOS_IMG" "$OVMF_CODE" "$OVMF_VARS" "$OC_IMG"
+
+# Should not reach here
+echo "[hackintosh] macOS session ended."
+echo "[hackintosh] Press POWER to restart the PS5."
+exec /bin/sh
