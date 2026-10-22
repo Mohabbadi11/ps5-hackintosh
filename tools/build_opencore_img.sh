@@ -1,74 +1,84 @@
 #!/bin/bash
 #
-# PS5 Hackintosh — Build OpenCore disk image
+# PS5 Hackintosh — Build OpenCore disk image (qcow2)
 #
-# Creates a qcow2 disk image containing the OpenCore EFI
-# bootloader, ready to use as the first boot disk in QEMU.
+# Creates a FAT32 disk image with the OpenCore EFI, then converts
+# to qcow2 for QEMU. Works on macOS (hdiutil) and Linux (losetup).
 #
-# Usage: ./tools/build_opencore_img.sh <EFI_DIR> <output.img>
-#
+# Usage: ./tools/build_opencore_img.sh [EFI_DIR] [output.img]
 
 set -euo pipefail
 
-EFI_DIR="${1:-}"
-OUTPUT="${2:-OpenCore.img}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+BUILD="$PROJECT_DIR/build"
 
-if [ -z "$EFI_DIR" ] || [ ! -d "$EFI_DIR/EFI" ]; then
-    echo "Usage: $0 <directory-containing-EFI/> [output.img]"
-    echo ""
-    echo "The directory must contain an EFI/ folder with:"
-    echo "  EFI/BOOT/BOOTx64.efi"
-    echo "  EFI/OC/OpenCore.efi"
-    echo "  EFI/OC/config.plist"
-    echo "  EFI/OC/ACPI/*.aml"
-    echo "  EFI/OC/Drivers/*.efi"
-    echo "  EFI/OC/Kexts/*.kext"
+EFI_DIR="${1:-$BUILD/opencore}"
+OUTPUT="${2:-$BUILD/OpenCore.img}"
+
+if [ ! -d "$EFI_DIR/EFI" ]; then
+    echo "Error: $EFI_DIR/EFI no existe."
+    echo "Ejecuta primero: ./tools/fetch_opencore.sh"
     exit 1
 fi
 
-echo "Building OpenCore disk image..."
+echo "Construyendo imagen OpenCore..."
+echo "  EFI: $EFI_DIR"
+echo "  Output: $OUTPUT"
 
-# Create a 512 MB raw image
-RAW_IMG=$(mktemp /tmp/oc_raw_XXXXXX.img)
-qemu-img create -f raw "$RAW_IMG" 512M
+DMG_TMP=$(mktemp /tmp/oc_XXXXXX.dmg)
+RAW_TMP=$(mktemp /tmp/oc_XXXXXX.raw)
+trap "rm -f '$DMG_TMP' '$RAW_TMP'" EXIT
 
-# Create GPT partition table with EFI System Partition
-# Using hdiutil on macOS
 if command -v hdiutil &>/dev/null; then
-    # macOS path
-    MOUNT_POINT=$(mktemp -d /tmp/oc_mount_XXXXXX)
+    # macOS: crear DMG con hdiutil
+    hdiutil create -size 256m -fs FAT32 -volname OPENCORE \
+        -layout GPTSPUD -ov "$DMG_TMP" >/dev/null
 
-    hdiutil attach -nomount "$RAW_IMG" 2>/dev/null || {
-        # Format as FAT32
-        DISK=$(hdiutil attach -nomount "$RAW_IMG" | head -1 | awk '{print $1}')
-        diskutil eraseDisk FAT32 OPENCORE GPT "$DISK"
-        MOUNT_POINT="/Volumes/OPENCORE"
-    }
+    MOUNT_INFO=$(hdiutil attach "$DMG_TMP" -nobrowse -noverify 2>/dev/null)
+    DISK=$(echo "$MOUNT_INFO" | grep '/dev/disk' | head -1 | awk '{print $1}')
+    VOL=$(echo "$MOUNT_INFO" | grep '/Volumes/' | sed 's/.*\/Volumes\//\/Volumes\//')
 
-    # Copy EFI contents
-    cp -R "$EFI_DIR/EFI" "$MOUNT_POINT/"
+    cp -R "$EFI_DIR/EFI" "$VOL/"
+    echo "  Contenido copiado a imagen"
 
-    # Unmount
-    hdiutil detach "$DISK" 2>/dev/null || diskutil unmountDisk "$DISK"
+    sync
+    hdiutil detach "$DISK" -quiet 2>/dev/null || diskutil unmountDisk "$DISK" >/dev/null 2>&1
+
+    # Convertir DMG → raw → qcow2
+    hdiutil convert "$DMG_TMP" -format UDTO -o "${RAW_TMP%.raw}" >/dev/null 2>&1 || true
+
+    if [ -f "${RAW_TMP%.raw}.cdr" ]; then
+        qemu-img convert -f raw -O qcow2 "${RAW_TMP%.raw}.cdr" "$OUTPUT"
+        rm -f "${RAW_TMP%.raw}.cdr"
+    else
+        # Alternativa directa
+        qemu-img convert -f dmg -O qcow2 "$DMG_TMP" "$OUTPUT"
+    fi
 else
-    # Linux path
-    LOOP=$(losetup -f --show "$RAW_IMG")
+    # Linux
+    qemu-img create -f raw "$RAW_TMP" 256M
+    LOOP=$(losetup -f --show "$RAW_TMP")
     parted -s "$LOOP" mklabel gpt
     parted -s "$LOOP" mkpart EFI fat32 1MiB 100%
     parted -s "$LOOP" set 1 esp on
     partprobe "$LOOP"
     mkfs.vfat -F32 "${LOOP}p1"
 
-    MOUNT_POINT=$(mktemp -d)
-    mount "${LOOP}p1" "$MOUNT_POINT"
-    cp -R "$EFI_DIR/EFI" "$MOUNT_POINT/"
-    umount "$MOUNT_POINT"
+    MNT=$(mktemp -d)
+    mount "${LOOP}p1" "$MNT"
+    cp -R "$EFI_DIR/EFI" "$MNT/"
+    umount "$MNT"
     losetup -d "$LOOP"
-    rmdir "$MOUNT_POINT"
+    rmdir "$MNT"
+
+    qemu-img convert -f raw -O qcow2 "$RAW_TMP" "$OUTPUT"
 fi
 
-# Convert to qcow2
-qemu-img convert -O qcow2 "$RAW_IMG" "$OUTPUT"
-rm -f "$RAW_IMG"
-
-echo "OpenCore image created: $OUTPUT ($(du -h "$OUTPUT" | cut -f1))"
+echo ""
+echo "OpenCore.img creado: $OUTPUT ($(du -h "$OUTPUT" | cut -f1))"
+echo ""
+echo "Contenido del EFI:"
+ls -la "$EFI_DIR/EFI/BOOT/" 2>/dev/null | tail -n+2 | sed 's/^/  /'
+echo "  ---"
+ls "$EFI_DIR/EFI/OC/Kexts/" 2>/dev/null | sed 's/^/  /'

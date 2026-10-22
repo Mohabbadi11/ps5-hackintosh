@@ -15,7 +15,7 @@ BUILD        := build
 LOADER_DIR   := third_party/ps5-linux-loader
 INITRAMFS_D  := $(BUILD)/initramfs_root
 
-.PHONY: all clean loader initramfs usb deploy acpi
+.PHONY: all clean loader initramfs rootfs usb deploy acpi
 
 all: loader initramfs
 
@@ -27,51 +27,42 @@ loader:
 	@echo "Loader built: $(BUILD)/bin/ps5-linux-loader.elf"
 
 # ── Custom initramfs for macOS boot ────────────────────────────────
-# Contains: busybox, QEMU (static), KVM modules, boot scripts, OpenCore
+# Minimal initramfs with busybox — pivots to ext4 rootfs with QEMU.
+# QEMU is NOT embedded here; it lives in the rootfs partition.
 initramfs: $(BUILD)/initrd.img
 $(BUILD)/initrd.img: initramfs/init initramfs/scripts/boot-macos.sh
 	@echo "Building Hackintosh initramfs..."
-	@mkdir -p $(INITRAMFS_D)/{bin,sbin,dev,proc,sys,mnt/usb,mnt/macos,etc,tmp,scripts,lib/modules}
+	@mkdir -p $(INITRAMFS_D)/{bin,sbin,dev,proc,sys,mnt/usb,mnt/macos,newroot,etc,tmp,scripts,lib/modules}
 
 	# Core scripts
 	cp initramfs/init $(INITRAMFS_D)/init
 	chmod +x $(INITRAMFS_D)/init
 	cp initramfs/scripts/*.sh $(INITRAMFS_D)/scripts/
 	chmod +x $(INITRAMFS_D)/scripts/*.sh
-	cp initramfs/etc/* $(INITRAMFS_D)/etc/ 2>/dev/null || true
 
-	# Check for required binaries
+	# BusyBox (required)
 	@if [ ! -f $(BUILD)/bin/busybox ]; then \
-		echo ""; \
-		echo "WARNING: $(BUILD)/bin/busybox not found."; \
-		echo "Run: ./tools/fetch_binaries.sh"; \
-		echo ""; \
-	else \
-		cp $(BUILD)/bin/busybox $(INITRAMFS_D)/bin/busybox; \
-		chmod +x $(INITRAMFS_D)/bin/busybox; \
-		cd $(INITRAMFS_D)/bin && for cmd in sh ls cat mount umount mkdir cp mv rm \
-			modprobe insmod lsmod mknod sleep echo clear grep sed awk \
-			dmesg ifconfig ip route; do \
-			ln -sf busybox $$cmd; \
-		done; \
-		cd $(INITRAMFS_D)/sbin && for cmd in modprobe insmod; do \
-			ln -sf ../bin/busybox $$cmd; \
-		done; \
+		echo "ERROR: $(BUILD)/bin/busybox not found. Run: ./tools/fetch_binaries.sh"; \
+		exit 1; \
 	fi
-
-	@if [ ! -f $(BUILD)/bin/qemu-system-x86_64 ]; then \
-		echo ""; \
-		echo "WARNING: $(BUILD)/bin/qemu-system-x86_64 not found."; \
-		echo "Run: ./tools/fetch_binaries.sh"; \
-		echo ""; \
-	else \
-		cp $(BUILD)/bin/qemu-system-x86_64 $(INITRAMFS_D)/bin/; \
-		chmod +x $(INITRAMFS_D)/bin/qemu-system-x86_64; \
-	fi
+	cp $(BUILD)/bin/busybox $(INITRAMFS_D)/bin/busybox
+	chmod +x $(INITRAMFS_D)/bin/busybox
+	cd $(INITRAMFS_D)/bin && for cmd in sh ls cat mount umount mkdir cp mv rm \
+		modprobe insmod lsmod mknod sleep echo clear grep sed awk \
+		dmesg ifconfig ip route switch_root; do \
+		ln -sf busybox $$cmd; \
+	done
+	cd $(INITRAMFS_D)/sbin && for cmd in modprobe insmod switch_root; do \
+		ln -sf ../bin/busybox $$cmd; \
+	done
 
 	# Build cpio archive
 	cd $(INITRAMFS_D) && find . | cpio -o -H newc 2>/dev/null | gzip > $(CURDIR)/$(BUILD)/initrd.img
 	@echo "Initramfs built: $(BUILD)/initrd.img ($(shell du -h $(BUILD)/initrd.img 2>/dev/null | cut -f1))"
+
+# ── Rootfs with QEMU (requires Docker) ────────────────────────────
+rootfs:
+	bash tools/create_rootfs.sh
 
 # ── Compile ACPI tables ────────────────────────────────────────────
 acpi:

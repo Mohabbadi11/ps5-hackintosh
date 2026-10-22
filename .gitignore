@@ -5,6 +5,7 @@ build/
 *.bin
 *.elf
 *.aml
+*.hex
 *.img
 *.qcow2
 *.fd

@@ -2,18 +2,21 @@
 #
 # PS5 Hackintosh — initramfs init (PID 1)
 #
-# Este script se ejecuta al arrancar Linux en la PS5.
-# Monta el USB, localiza el rootfs o la imagen de macOS,
-# y lanza QEMU/KVM con OpenCore para bootear macOS.
+# Estrategia: este initramfs mínimo monta un rootfs completo
+# desde una segunda partición del USB (ext4) que contiene
+# Alpine Linux + QEMU + KVM, y ejecuta el boot de macOS desde ahí.
 #
-# El usuario ve macOS directamente en su TV — nada de Linux.
+# USB layout:
+#   Partición 1 (FAT32): bzImage, initrd.img, cmdline.txt
+#   Partición 2 (ext4):  rootfs con Alpine + QEMU
+#   Partición 3 (exFAT): macos/ con OpenCore, OVMF, macOS.img
 
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 
 mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
-mkdir -p /dev/pts /dev/shm /tmp
+mkdir -p /dev/pts /dev/shm /tmp /newroot /mnt/usb /mnt/macos
 mount -t devpts   devpts   /dev/pts
 mount -t tmpfs    tmpfs    /dev/shm
 mount -t tmpfs    tmpfs    /tmp
@@ -28,83 +31,100 @@ echo " ║         Arrancando macOS...                  ║"
 echo " ╚══════════════════════════════════════════════╝"
 echo ""
 
-# ── Cargar módulos del kernel ──────────────────────────
+# ── Cargar módulos básicos ─────────────────────────────
 echo "[hackintosh] Cargando módulos..."
-for mod in kvm kvm_amd vfio vfio-pci vfio-iommu-type1 \
-           virtio virtio_blk virtio_net virtio_scsi \
-           loop usb_storage amdgpu snd_hda_intel; do
+for mod in kvm kvm_amd loop usb_storage vfat exfat ext4; do
     modprobe -q $mod 2>/dev/null
 done
 
 # ── Esperar dispositivos USB ───────────────────────────
-echo "[hackintosh] Esperando almacenamiento USB..."
+echo "[hackintosh] Esperando USB..."
 sleep 3
 
-# ── Buscar y montar USB con el directorio macos/ ──────
-USB_DEV=""
-mkdir -p /mnt/usb
+# ── MODO A: Rootfs en partición ext4 del USB ──────────
+# Busca una partición ext4 con /usr/bin/qemu-system-x86_64
+echo "[hackintosh] Buscando rootfs en particiones USB..."
+ROOTFS_DEV=""
 
-for dev in /dev/sd[a-z]1 /dev/sd[a-z]2 /dev/sd[a-z] \
-           /dev/nvme0n1p1 /dev/nvme0n1p2; do
+for dev in /dev/sd[a-z]2 /dev/sd[a-z]3 /dev/sd[a-z]1; do
     [ -b "$dev" ] || continue
 
-    for fs in vfat exfat ext4; do
+    if mount -t ext4 "$dev" /newroot 2>/dev/null; then
+        if [ -f /newroot/usr/bin/qemu-system-x86_64 ] || \
+           [ -f /newroot/bin/qemu-system-x86_64 ]; then
+            ROOTFS_DEV="$dev"
+            echo "[hackintosh] Rootfs encontrado: $dev"
+            break
+        fi
+        umount /newroot 2>/dev/null
+    fi
+done
+
+if [ -n "$ROOTFS_DEV" ]; then
+    echo "[hackintosh] Pivotando a rootfs completo..."
+
+    # Montar filesystems virtuales en el nuevo root
+    mount --move /proc /newroot/proc 2>/dev/null || mount -t proc proc /newroot/proc
+    mount --move /sys /newroot/sys 2>/dev/null || mount -t sysfs sysfs /newroot/sys
+    mount --move /dev /newroot/dev 2>/dev/null || mount -t devtmpfs devtmpfs /newroot/dev
+
+    # Copiar script de arranque de macOS al nuevo root
+    mkdir -p /newroot/hackintosh
+    cp /scripts/boot-macos.sh /newroot/hackintosh/ 2>/dev/null
+
+    # Pivot root y arrancar macOS
+    cd /newroot
+    exec switch_root /newroot /hackintosh/boot-macos.sh
+fi
+
+# ── MODO B: Todo-en-uno (QEMU en initramfs) ───────────
+# Fallback si no hay rootfs ext4 — necesita QEMU en el initramfs
+echo "[hackintosh] No se encontró rootfs ext4."
+echo "[hackintosh] Intentando modo embebido..."
+
+# Buscar USB FAT32/exFAT con directorio macos/
+USB_DEV=""
+for dev in /dev/sd[a-z]1 /dev/sd[a-z] /dev/sd[a-z]3; do
+    [ -b "$dev" ] || continue
+    for fs in vfat exfat; do
         if mount -t $fs "$dev" /mnt/usb 2>/dev/null; then
             if [ -d /mnt/usb/macos ]; then
                 USB_DEV="$dev"
-                echo "[hackintosh] USB montado: $dev ($fs)"
                 break 2
             fi
-            umount /mnt/usb 2>/dev/null
+            umount /mnt/usb
         fi
     done
 done
 
 if [ -z "$USB_DEV" ]; then
-    echo ""
-    echo "[hackintosh] ERROR: No se encontró USB con directorio macos/"
-    echo ""
-    echo "  El USB debe contener:"
-    echo "    /macos/macOS.img      — imagen de disco de macOS"
-    echo "    /macos/OVMF_CODE.fd   — firmware UEFI"
-    echo "    /macos/OpenCore.img   — imagen del bootloader OpenCore"
-    echo ""
-    echo "  Opcional:"
-    echo "    /macos/EFI/           — OpenCore EFI (alternativa a imagen)"
-    echo ""
-    echo "[hackintosh] Abriendo shell de emergencia..."
+    echo "[hackintosh] ERROR: No se encontró USB con macos/"
+    echo "[hackintosh] Shell de emergencia..."
     exec /bin/sh
 fi
 
-# ── Verificar archivos necesarios ──────────────────────
+# Verificar QEMU disponible
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    echo ""
+    echo "[hackintosh] ERROR: QEMU no encontrado en el initramfs."
+    echo ""
+    echo "  Para usar este modo, necesitas incluir QEMU estático"
+    echo "  en el initramfs. O usa el MODO A con rootfs ext4."
+    echo ""
+    echo "  Preparar rootfs en USB:"
+    echo "    1. Crear partición ext4 en el USB"
+    echo "    2. Instalar Alpine Linux mínimo con QEMU"
+    echo "    3. Ver: tools/create_rootfs.sh"
+    echo ""
+    exec /bin/sh
+fi
+
+# Si QEMU está disponible, lanzar macOS
 MACOS_IMG="/mnt/usb/macos/macOS.img"
 OVMF_CODE="/mnt/usb/macos/OVMF_CODE.fd"
+OVMF_VARS="/tmp/OVMF_VARS.fd"
 OC_IMG="/mnt/usb/macos/OpenCore.img"
 
-missing=""
-[ ! -f "$MACOS_IMG" ] && missing="$missing macOS.img"
-[ ! -f "$OVMF_CODE" ] && missing="$missing OVMF_CODE.fd"
+[ -f "$OVMF_CODE" ] && cp "$OVMF_CODE" "$OVMF_VARS"
 
-if [ -n "$missing" ]; then
-    echo "[hackintosh] ERROR: Faltan archivos:$missing"
-    echo "[hackintosh] Abriendo shell..."
-    exec /bin/sh
-fi
-
-# ── Crear OVMF_VARS si no existe ──────────────────────
-OVMF_VARS="/mnt/usb/macos/OVMF_VARS.fd"
-if [ ! -f "$OVMF_VARS" ]; then
-    echo "[hackintosh] Creando NVRAM store..."
-    cp "$OVMF_CODE" /tmp/OVMF_VARS.fd
-    OVMF_VARS="/tmp/OVMF_VARS.fd"
-fi
-
-# ── Hugepages para KVM ────────────────────────────────
-echo "[hackintosh] Configurando memoria..."
-echo 4096 > /proc/sys/vm/nr_hugepages 2>/dev/null || true
-mkdir -p /dev/hugepages
-mount -t hugetlbfs hugetlbfs /dev/hugepages 2>/dev/null || true
-
-# ── Lanzar macOS ──────────────────────────────────────
-echo "[hackintosh] Lanzando macOS..."
 exec /scripts/boot-macos.sh "$MACOS_IMG" "$OVMF_CODE" "$OVMF_VARS" "$OC_IMG"
