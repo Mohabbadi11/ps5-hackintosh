@@ -116,7 +116,7 @@ docker run --rm --platform linux/amd64 \
 
     apk add --no-cache gcc musl-dev make flex bison bc perl \
         elfutils-dev openssl-dev linux-headers diffutils findutils \
-        xz coreutils bash patch git >/dev/null 2>&1
+        xz coreutils bash patch git gawk >/dev/null 2>&1
 
     KERNEL_VER=$KERNEL_VER
     KERNEL_MAJOR=$KERNEL_MAJOR
@@ -136,6 +136,10 @@ docker run --rm --platform linux/amd64 \
     if [ ! -f .ps5_patched ]; then
         echo '  Aplicando patches PS5...'
         patch -p1 < /build/ps5-linux-patches/linux.patch || true
+        # Fix: los patches añaden xhci-ps5.c pero no actualizan el Makefile
+        if ! grep -q 'xhci-ps5' drivers/usb/host/Makefile; then
+            sed -i '/^xhci-hcd-y += xhci-trace.o/a xhci-hcd-y += xhci-ps5.o' drivers/usb/host/Makefile
+        fi
         touch .ps5_patched
     fi
 
