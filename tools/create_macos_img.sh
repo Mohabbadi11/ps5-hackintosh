@@ -105,13 +105,12 @@ if [ ! -f "$RECOVERY_IMG" ]; then
         exit 1
     fi
 
-    # Crear imagen raw con el recovery
-    DMG_SIZE=$(stat -f%z "$DMG_FILE" 2>/dev/null || stat -c%s "$DMG_FILE")
-    IMG_SIZE=$(( (DMG_SIZE / 1048576 + 128) ))  # MB + margen
-    qemu-img create -f raw "$RECOVERY_IMG" "${IMG_SIZE}M"
-
-    # Crear partición GPT con el DMG
-    dd if="$DMG_FILE" of="$RECOVERY_IMG" bs=1M conv=notrunc
+    # Convertir DMG comprimido a imagen raw (UDRW) que QEMU pueda leer
+    if command -v hdiutil &>/dev/null; then
+        hdiutil convert "$DMG_FILE" -format UDRW -o "$RECOVERY_IMG" 2>&1 | tail -3
+    else
+        qemu-img convert -f dmg -O raw "$DMG_FILE" "$RECOVERY_IMG"
+    fi
     echo "  Recovery image: $RECOVERY_IMG ($(du -h "$RECOVERY_IMG" | cut -f1))"
 else
     echo "[4/4] Recovery image ya existe"
