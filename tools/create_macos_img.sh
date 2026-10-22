@@ -64,7 +64,7 @@ else
 fi
 
 # ── Descargar recovery de macOS ───────────────────────
-if [ ! -f "$MACOS_DIR/BaseSystem.dmg" ] && [ ! -f "$MACOS_DIR/RecoveryImage.dmg" ]; then
+if [ ! -f "$MACOS_DIR/com.apple.recovery.boot/BaseSystem.dmg" ] && [ ! -f "$MACOS_DIR/BaseSystem.dmg" ]; then
     echo "[2/4] Descargando macOS $VERSION recovery desde Apple..."
     echo "  (esto puede tardar unos minutos)"
     cd "$MACOS_DIR"
@@ -94,10 +94,10 @@ if [ ! -f "$RECOVERY_IMG" ]; then
     echo "[4/4] Creando imagen del recovery..."
     # Buscar el DMG descargado
     DMG_FILE=""
-    if [ -f "$MACOS_DIR/BaseSystem.dmg" ]; then
+    if [ -f "$MACOS_DIR/com.apple.recovery.boot/BaseSystem.dmg" ]; then
+        DMG_FILE="$MACOS_DIR/com.apple.recovery.boot/BaseSystem.dmg"
+    elif [ -f "$MACOS_DIR/BaseSystem.dmg" ]; then
         DMG_FILE="$MACOS_DIR/BaseSystem.dmg"
-    elif [ -f "$MACOS_DIR/RecoveryImage.dmg" ]; then
-        DMG_FILE="$MACOS_DIR/RecoveryImage.dmg"
     fi
 
     if [ -z "$DMG_FILE" ]; then
