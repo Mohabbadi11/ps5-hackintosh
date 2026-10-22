@@ -55,7 +55,7 @@ if [ "$(uname -m)" = "x86_64" ] && qemu-system-x86_64 -accel help 2>&1 | grep -q
     ACCEL="-accel hvf -cpu Penryn,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,vendor=GenuineIntel"
     echo "  Aceleración: HVF (Intel Mac — rápido)"
 else
-    ACCEL="-accel tcg,thread=multi -cpu Penryn,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,vendor=GenuineIntel"
+    ACCEL="-accel tcg,thread=multi -cpu Haswell-noTSX,vendor=GenuineIntel,+avx,+aes,+xsave,+xsaveopt"
     echo "  Aceleración: TCG (emulación x86 — la instalación será lenta)"
     echo "  Nota: en PS5 usará KVM nativo, esto es solo para preparar la imagen"
 fi
