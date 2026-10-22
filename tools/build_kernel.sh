@@ -32,21 +32,20 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
-# ── Descargar patches ─────────────────────────────────
-PATCH_DIR="$BUILD/kernel/patches"
-if [ ! -f "$PATCH_DIR/linux.patch" ]; then
-    echo "[1/4] Descargando patches de ps5-linux..."
-    mkdir -p "$PATCH_DIR"
-    curl -sL "$PATCHES_REPO/raw/main/linux.patch" -o "$PATCH_DIR/linux.patch"
-    curl -sL "$PATCHES_REPO/raw/main/.config" -o "$PATCH_DIR/ps5-defconfig"
-    echo "  Patches descargados"
+# ── Descargar patches (repo completo — incluye firmware) ─
+PATCH_DIR="$BUILD/kernel/ps5-linux-patches"
+if [ ! -d "$PATCH_DIR/.git" ]; then
+    echo "[1/4] Clonando ps5-linux-patches (incluye firmware)..."
+    rm -rf "$PATCH_DIR"
+    git clone --depth 1 "$PATCHES_REPO" "$PATCH_DIR"
+    echo "  Patches + firmware descargados"
 else
     echo "[1/4] Patches ya descargados"
 fi
 
 # ── Crear config con KVM ─────────────────────────────
 echo "[2/4] Preparando config con KVM/VFIO..."
-KVM_CONFIG="$PATCH_DIR/kvm-additions.config"
+KVM_CONFIG="$BUILD/kernel/kvm-additions.config"
 cat > "$KVM_CONFIG" << 'KVMEOF'
 # KVM / hardware virtualization
 CONFIG_VIRTUALIZATION=y
@@ -109,14 +108,15 @@ echo "  Compilando en Docker x86_64..."
 
 docker run --rm --platform linux/amd64 \
     -v "$BUILD/kernel:/build" \
-    -v "$PATCH_DIR:/patches:ro" \
+    -v "$PATCH_DIR:/build/ps5-linux-patches:ro" \
+    -v "$KVM_CONFIG:/build/kvm-additions.config:ro" \
     -w /build \
     alpine:3.20 sh -c "
     set -e
 
     apk add --no-cache gcc musl-dev make flex bison bc perl \
         elfutils-dev openssl-dev linux-headers diffutils findutils \
-        xz coreutils bash patch >/dev/null 2>&1
+        xz coreutils bash patch git >/dev/null 2>&1
 
     KERNEL_VER=$KERNEL_VER
     KERNEL_MAJOR=$KERNEL_MAJOR
@@ -135,12 +135,12 @@ docker run --rm --platform linux/amd64 \
     # Aplicar patches de PS5
     if [ ! -f .ps5_patched ]; then
         echo '  Aplicando patches PS5...'
-        patch -p1 < /patches/linux.patch || true
+        patch -p1 < /build/ps5-linux-patches/linux.patch || true
         touch .ps5_patched
     fi
 
     # Copiar config base de PS5
-    cp /patches/ps5-defconfig .config
+    cp /build/ps5-linux-patches/.config .config
 
     # Añadir opciones KVM/VFIO
     echo '  Habilitando KVM/VFIO...'
@@ -149,7 +149,6 @@ docker run --rm --platform linux/amd64 \
             '#'*|'') continue ;;
             CONFIG_*=*)
                 key=\${line%%=*}
-                # Reemplazar si existe, añadir si no
                 if grep -q \"^\${key}=\" .config 2>/dev/null; then
                     sed -i \"s|^\${key}=.*|\${line}|\" .config
                 elif grep -q \"^# \${key} is not set\" .config 2>/dev/null; then
@@ -159,13 +158,13 @@ docker run --rm --platform linux/amd64 \
                 fi
                 ;;
         esac
-    done < /patches/kvm-additions.config
+    done < /build/kvm-additions.config
 
     # Resolver dependencias
     make olddefconfig
 
     echo '  Compilando bzImage...'
-    make -j\$(nproc) bzImage 2>&1 | tail -5
+    make -j\$(nproc) bzImage 2>&1
 
     # Copiar resultado
     cp arch/x86/boot/bzImage /build/bzImage
