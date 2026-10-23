@@ -5,20 +5,20 @@
  * Runs on the Linux host before QEMU; virtual devices are passed to macOS.
  *
  * Mapping:
- *   Left stick  → Mouse movement
- *   Right stick → Scroll
- *   Cross (X)   → Left click
- *   Circle      → Right click
- *   Triangle    → Enter
- *   Square      → Space
- *   D-pad       → Arrow keys
- *   L1          → Escape
- *   R1          → Tab
- *   L3          → Middle click
- *   R3          → Backspace
- *   Options     → Cmd (Meta)
- *   Share       → Alt
- *   Touchpad    → Left click
+ *   Left stick  -> Mouse movement
+ *   Right stick -> Scroll
+ *   Cross (X)   -> Left click
+ *   Circle      -> Right click
+ *   Triangle    -> Enter
+ *   Square      -> Space
+ *   D-pad       -> Arrow keys
+ *   L1          -> Escape
+ *   R1          -> Tab
+ *   L3          -> Middle click
+ *   R3          -> Backspace
+ *   Options     -> Cmd (Meta)
+ *   Share       -> Alt
+ *   Touchpad    -> Left click
  *
  * Writes created evdev paths to /tmp/ds-mouse.env for boot-macos.sh
  */
@@ -175,12 +175,12 @@ int main(void) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    printf("[ds-mouse] Buscando DualSense...\n");
+    printf("[ds-mouse] Looking for DualSense...\n");
 
     for (int i = 0; i < 30; i++) {
         if (find_dualsense(ds_path, sizeof(ds_path)) == 0) break;
         if (i == 29) {
-            printf("[ds-mouse] DualSense no encontrado\n");
+            printf("[ds-mouse] DualSense not found\n");
             return 1;
         }
         sleep(1);
@@ -194,7 +194,7 @@ int main(void) {
     int mouse = create_mouse();
     int kbd = create_keyboard();
     if (mouse < 0 || kbd < 0) {
-        printf("[ds-mouse] Error creando uinput\n");
+        printf("[ds-mouse] Error creating uinput devices\n");
         return 1;
     }
 
@@ -213,7 +213,7 @@ int main(void) {
 
     printf("[ds-mouse] Mouse:    %s\n", mouse_path);
     printf("[ds-mouse] Keyboard: %s\n", kbd_path);
-    printf("[ds-mouse] Mapeo activo\n");
+    printf("[ds-mouse] Mapping active\n");
 
     struct input_absinfo abs_info;
     int mid = 128, range = 128;
@@ -328,6 +328,6 @@ int main(void) {
     close(mouse);
     close(kbd);
 
-    printf("[ds-mouse] Finalizado\n");
+    printf("[ds-mouse] Stopped\n");
     return 0;
 }

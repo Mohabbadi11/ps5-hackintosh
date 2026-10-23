@@ -1,16 +1,16 @@
 #!/bin/bash
 #
-# PS5 Hackintosh — Preparar USB de arranque (3 particiones)
+# PS5 Hackintosh — Create bootable USB drive (3 partitions)
 #
-# Wizard interactivo que lista discos externos, te deja elegir,
-# y crea el USB con la estructura necesaria.
+# Interactive wizard that lists external disks, lets you choose,
+# and creates the USB with the required layout.
 #
-# Estructura del USB:
-#   Partición 1 (FAT32, ~500MB): bzImage, initrd.img, cmdline.txt
-#   Partición 2 (ext4, ~1.2GB):  rootfs Alpine con QEMU
-#   Partición 3 (exFAT, resto):  macos/ con OpenCore.img, OVMF, macOS.img
+# USB layout:
+#   Partition 1 (FAT32, ~500MB): bzImage, initrd.img, cmdline.txt
+#   Partition 2 (ext4, ~1.2GB):  Alpine rootfs with QEMU
+#   Partition 3 (exFAT, rest):   macos/ with OpenCore.img, OVMF, macOS.img
 #
-# Uso: ./tools/create_usb.sh
+# Usage: ./tools/create_usb.sh
 
 set -euo pipefail
 
@@ -20,12 +20,12 @@ BUILD="$PROJECT_DIR/build"
 
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
-echo "║  PS5 Hackintosh — Preparación del USB           ║"
+echo "║  PS5 Hackintosh — USB Drive Setup               ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
-# ── Verificar artefactos ─────────────────────────────
-echo "Verificando artefactos..."
+# ── Check build artifacts ────────────────────────────
+echo "Checking build artifacts..."
 echo ""
 MISSING=""
 ALL_OK=true
@@ -33,7 +33,7 @@ for f in bzImage initrd.img OpenCore.img OVMF_CODE.fd OVMF_VARS.fd rootfs.img ma
     if [ -f "$BUILD/$f" ]; then
         printf "  %-20s %s\n" "$f" "$(du -h "$BUILD/$f" | cut -f1)"
     else
-        printf "  %-20s FALTA\n" "$f"
+        printf "  %-20s MISSING\n" "$f"
         MISSING="$MISSING $f"
         ALL_OK=false
     fi
@@ -41,9 +41,9 @@ done
 echo ""
 
 if [ "$ALL_OK" = false ]; then
-    echo "ERROR: Faltan artefactos:$MISSING"
+    echo "ERROR: Missing artifacts:$MISSING"
     echo ""
-    echo "Ejecuta primero:"
+    echo "Build them first:"
     echo "  ./tools/build_kernel.sh      # bzImage"
     echo "  make initramfs               # initrd.img"
     echo "  ./tools/fetch_opencore.sh    # kexts + drivers"
@@ -53,8 +53,8 @@ if [ "$ALL_OK" = false ]; then
     exit 1
 fi
 
-# ── Listar discos externos ───────────────────────────
-echo "Buscando discos externos..."
+# ── List external disks ─────────────────────────────
+echo "Scanning for external disks..."
 echo ""
 
 DISKS=()
@@ -64,46 +64,33 @@ while IFS= read -r line; do
     disk=$(echo "$line" | awk '{print $1}')
     [ -z "$disk" ] && continue
 
-    # Saltar si no es disco block
-    [ ! -b "$disk" ] && continue
+    # Only accept "external" disks — skip internal, synthesized, disk images
+    case "$line" in
+        *external*) ;;
+        *) continue ;;
+    esac
 
-    # Obtener info del disco
     info=$(diskutil info "$disk" 2>/dev/null) || continue
 
-    # Solo discos externos/removibles
-    is_internal=$(echo "$info" | grep -i "Internal:" | awk '{print $NF}')
-    is_removable=$(echo "$info" | grep -i "Removable Media:" | awk '{print $NF}')
-    protocol=$(echo "$info" | grep -i "Protocol:" | awk '{print $NF}')
-
-    # Saltar discos internos
-    if [ "$is_internal" = "Yes" ] && [ "$is_removable" != "Yes" ]; then
-        continue
-    fi
-
-    # Saltar disk images (DMG montados, etc.)
-    if [ "$protocol" = "Disk" ] && echo "$info" | grep -qi "image"; then
-        continue
-    fi
-
-    disk_size=$(echo "$info" | grep "Disk Size:" | sed 's/.*:[ ]*//' | sed 's/ (.*//')
-    disk_name=$(echo "$info" | grep "Media Name:" | sed 's/.*:[ ]*//')
-    [ -z "$disk_name" ] && disk_name="(sin nombre)"
+    disk_size=$(echo "$info" | grep "Disk Size:" | sed 's/.*:[ ]*//' | sed 's/ (.*//' || true)
+    disk_name=$(echo "$info" | grep "Media Name:" | sed 's/.*:[ ]*//' || true)
+    [ -z "$disk_name" ] && disk_name="(unnamed)"
 
     DISKS+=("$disk")
     DISK_INFO+=("$(printf "%-12s  %-10s  %s" "$disk" "$disk_size" "$disk_name")")
 
-done < <(diskutil list 2>/dev/null | grep "^/dev/disk" | awk '{print $1}')
+done < <(diskutil list 2>/dev/null | grep "^/dev/disk")
 
 if [ ${#DISKS[@]} -eq 0 ]; then
-    echo "  No se encontraron discos externos."
+    echo "  No external disks found."
     echo ""
-    echo "  Conecta un USB de al menos 64 GB y vuelve a ejecutar."
+    echo "  Connect a USB drive (64 GB minimum) and try again."
     exit 1
 fi
 
-echo "  Discos externos encontrados:"
+echo "  External disks found:"
 echo ""
-printf "  %-4s %-12s  %-10s  %s\n" "#" "Dispositivo" "Tamaño" "Nombre"
+printf "  %-4s %-12s  %-10s  %s\n" "#" "Device" "Size" "Name"
 echo "  ─────────────────────────────────────────────────"
 
 for i in "${!DISK_INFO[@]}"; do
@@ -111,126 +98,128 @@ for i in "${!DISK_INFO[@]}"; do
 done
 echo ""
 
-# ── Seleccionar disco ────────────────────────────────
-read -p "  Selecciona el disco (1-${#DISKS[@]}) o 'q' para salir: " CHOICE
+# ── Select disk ──────────────────────────────────────
+read -p "  Select disk (1-${#DISKS[@]}) or 'q' to quit: " CHOICE
 
 if [ "$CHOICE" = "q" ] || [ "$CHOICE" = "Q" ]; then
-    echo "  Cancelado."
+    echo "  Cancelled."
     exit 0
 fi
 
 if ! [[ "$CHOICE" =~ ^[0-9]+$ ]] || [ "$CHOICE" -lt 1 ] || [ "$CHOICE" -gt ${#DISKS[@]} ]; then
-    echo "  Opción inválida."
+    echo "  Invalid selection."
     exit 1
 fi
 
 DISK="${DISKS[$((CHOICE-1))]}"
 
-# ── Mostrar info detallada y confirmar ───────────────
+# ── Show details and confirm ─────────────────────────
 echo ""
 echo "  ┌─────────────────────────────────────────────┐"
-echo "  │  DISCO SELECCIONADO                         │"
+echo "  │  SELECTED DISK                              │"
 echo "  └─────────────────────────────────────────────┘"
 diskutil info "$DISK" | grep -E "Device Node:|Media Name:|Disk Size:|Removable|Protocol:" | sed 's/^/  /'
 echo ""
 
-# Mostrar particiones actuales
-echo "  Particiones actuales:"
+echo "  Current partitions:"
 diskutil list "$DISK" 2>/dev/null | tail -n+2 | sed 's/^/  /'
 echo ""
 
-echo "  ⚠️  ATENCIÓN: Se BORRARÁN TODOS los datos de este disco."
-echo "  Se crearán 3 particiones para PS5 Hackintosh."
+echo "  WARNING: ALL data on this disk will be ERASED."
+echo "  3 partitions will be created for PS5 Hackintosh."
 echo ""
-read -p "  ¿Estás seguro? Escribe 'BORRAR' para confirmar: " CONFIRM
+read -p "  Are you sure? Type 'ERASE' to confirm: " CONFIRM
 
-if [ "$CONFIRM" != "BORRAR" ]; then
-    echo "  Cancelado. (Escribe exactamente 'BORRAR' para confirmar)"
+if [ "$CONFIRM" != "ERASE" ]; then
+    echo "  Cancelled. (Type exactly 'ERASE' to confirm)"
     exit 0
 fi
 
 echo ""
 
-# ── Particionar ──────────────────────────────────────
-echo "[1/6] Desmontando disco..."
+# ── Partition ────────────────────────────────────────
+echo "[1/7] Unmounting disk..."
 diskutil unmountDisk "$DISK" 2>/dev/null || true
 
-echo "[2/6] Creando tabla de particiones GPT..."
+echo "[2/7] Creating MBR partition table..."
 echo "  Part 1: FAT32  500 MB  (boot: bzImage + initrd)"
-echo "  Part 2: Free  1.2 GB   (rootfs ext4: Alpine + QEMU)"
-echo "  Part 3: exFAT  resto   (macos: OpenCore + macOS.img)"
-diskutil partitionDisk "$DISK" GPT \
+echo "  Part 2: FAT32  1.2 GB  (placeholder, will be overwritten with ext4 rootfs)"
+echo "  Part 3: exFAT  rest    (macos: OpenCore + macOS.img)"
+# MBR instead of GPT: avoids the automatic EFI partition that confuses the loader
+diskutil partitionDisk "$DISK" MBR \
     FAT32 PS5BOOT 500MB \
-    "Free Space" ROOTFS 1200MB \
+    FAT32 ROOTFS 1200MB \
     ExFAT PS5MACOS R
 
 echo ""
-echo "[3/6] Copiando boot files a PS5BOOT..."
+echo "[3/7] Copying boot files to PS5BOOT..."
 BOOT_VOL="/Volumes/PS5BOOT"
+for i in $(seq 1 5); do [ -d "$BOOT_VOL" ] && break; sleep 1; done
 if [ -d "$BOOT_VOL" ]; then
     cp "$BUILD/bzImage" "$BOOT_VOL/"
     cp "$BUILD/initrd.img" "$BOOT_VOL/"
     cp "$PROJECT_DIR/usb/cmdline.txt" "$BOOT_VOL/"
     [ -f "$PROJECT_DIR/usb/vram.txt" ] && cp "$PROJECT_DIR/usb/vram.txt" "$BOOT_VOL/"
-    echo "  bzImage + initrd.img + cmdline.txt copiados"
+    echo "  bzImage + initrd.img + cmdline.txt copied"
 else
-    echo "  Error: $BOOT_VOL no montado"
+    echo "  Error: $BOOT_VOL not mounted"
     exit 1
 fi
 
-echo "[4/6] Escribiendo rootfs ext4..."
-# diskutil deja la part 2 como "Free Space" — necesitamos encontrarla
-# Es la segunda partición del disco
+echo "[4/7] Unmounting all partitions before writing rootfs..."
+diskutil unmountDisk "$DISK" 2>/dev/null || true
+sleep 1
+
+echo "[5/7] Writing rootfs ext4 image (requires sudo)..."
+# Partition 2 (ROOTFS placeholder) is overwritten with the ext4 image
 PART2="${DISK}s2"
 if [ -e "$PART2" ]; then
-    echo "  Escribiendo rootfs.img en $PART2 (necesita sudo)..."
     sudo dd if="$BUILD/rootfs.img" of="$PART2" bs=4M 2>&1
-    echo "  rootfs escrito en $PART2"
+    echo "  rootfs ext4 written to $PART2"
 else
-    echo "  Advertencia: $PART2 no encontrado"
-    echo "  Escribe manualmente: sudo dd if=build/rootfs.img of=${DISK}s2 bs=4M"
+    echo "  Error: $PART2 not found"
+    exit 1
 fi
 
-echo "[5/6] Copiando archivos macOS a PS5MACOS..."
+echo "[6/7] Copying macOS files to PS5MACOS..."
+# Remount only PS5MACOS (partition 3)
+PART3="${DISK}s3"
+diskutil mount "$PART3" 2>/dev/null || true
 MACOS_VOL="/Volumes/PS5MACOS"
-# Esperar a que se monte
-for i in $(seq 1 5); do
-    [ -d "$MACOS_VOL" ] && break
-    sleep 1
-done
+for i in $(seq 1 5); do [ -d "$MACOS_VOL" ] && break; sleep 1; done
 
 if [ -d "$MACOS_VOL" ]; then
     mkdir -p "$MACOS_VOL/macos"
-    echo "  Copiando OpenCore.img..."
+    echo "  Copying OpenCore.img..."
     cp "$BUILD/OpenCore.img" "$MACOS_VOL/macos/"
-    echo "  Copiando OVMF_CODE.fd..."
+    echo "  Copying OVMF_CODE.fd..."
     cp "$BUILD/OVMF_CODE.fd" "$MACOS_VOL/macos/"
-    echo "  Copiando OVMF_VARS.fd..."
+    echo "  Copying OVMF_VARS.fd..."
     cp "$BUILD/OVMF_VARS.fd" "$MACOS_VOL/macos/"
-    echo "  Copiando macOS.img ($(du -h "$BUILD/macOS.img" | cut -f1) — esto tarda un rato)..."
+    echo "  Copying macOS.img ($(du -h "$BUILD/macOS.img" | cut -f1) — this may take a while)..."
     cp "$BUILD/macOS.img" "$MACOS_VOL/macos/"
-    echo "  Todo copiado a PS5MACOS"
+    echo "  All files copied to PS5MACOS"
 else
-    echo "  Error: $MACOS_VOL no montado"
+    echo "  Error: $MACOS_VOL not mounted"
     exit 1
 fi
 
-echo "[6/6] Sincronizando y expulsando..."
+echo "[7/7] Syncing and ejecting..."
 sync
 diskutil unmountDisk "$DISK" 2>/dev/null || true
 
 echo ""
 echo "═══════════════════════════════════════════════════"
 echo ""
-echo "  ✓ USB LISTO"
+echo "  USB DRIVE READY"
 echo ""
-echo "  Partición 1 (FAT32  PS5BOOT):  bzImage + initrd + cmdline"
-echo "  Partición 2 (ext4):            rootfs Alpine + QEMU + ds-mouse"
-echo "  Partición 3 (exFAT  PS5MACOS): OpenCore + OVMF + macOS.img"
+echo "  Partition 1 (FAT32  PS5BOOT):  bzImage + initrd + cmdline"
+echo "  Partition 2 (ext4):            Alpine rootfs + QEMU + ds-mouse"
+echo "  Partition 3 (exFAT  PS5MACOS): OpenCore + OVMF + macOS.img"
 echo ""
-echo "  Siguiente paso:"
-echo "    1. Conecta el USB a la PS5"
-echo "    2. Activa el jailbreak en la PS5"
-echo "    3. Ejecuta: ./tools/launch_hackintosh.sh"
+echo "  Next steps:"
+echo "    1. Connect the USB drive to your PS5"
+echo "    2. Activate the jailbreak on the PS5"
+echo "    3. Run: ./tools/launch_hackintosh.sh"
 echo ""
 echo "═══════════════════════════════════════════════════"
