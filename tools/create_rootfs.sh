@@ -53,6 +53,14 @@ docker run --rm --platform linux/amd64 \
     alpine:3.20 sh -c '
     set -e
 
+    # Compilar ds-mouse (DualSense → ratón/teclado mapper)
+    echo "Compilando ds-mouse..."
+    apk add --no-cache gcc musl-dev linux-headers >/dev/null 2>&1
+    gcc -O2 -static -o /tmp/ds-mouse /scripts/ds-mouse.c
+    echo "ds-mouse compilado"
+
+    set -e
+
     echo "Instalando paquetes..."
     apk add --no-cache \
         qemu-system-x86_64 \
@@ -117,9 +125,11 @@ docker run --rm --platform linux/amd64 \
     echo "ps5-hackintosh" > /rootfs/etc/hostname
     echo "nameserver 8.8.8.8" > /rootfs/etc/resolv.conf
 
-    # Copiar script de boot
+    # Copiar script de boot y ds-mouse
     cp /scripts/boot-macos.sh /rootfs/hackintosh/ 2>/dev/null || true
     chmod +x /rootfs/hackintosh/boot-macos.sh 2>/dev/null || true
+    cp /tmp/ds-mouse /rootfs/hackintosh/ds-mouse
+    chmod +x /rootfs/hackintosh/ds-mouse
 
     echo "Rootfs creado correctamente."
     du -sh /rootfs/

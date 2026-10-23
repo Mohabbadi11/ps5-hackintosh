@@ -161,6 +161,27 @@ if [ -n "$GPU_PCI" ]; then
     fi
 fi
 
+# ── DualSense → ratón/teclado ────────────────────────
+DS_MOUSE_EVDEV=""
+DS_KBD_EVDEV=""
+
+if [ -x /hackintosh/ds-mouse ]; then
+    modprobe -q uinput 2>/dev/null
+    echo "[hackintosh] Iniciando mapper DualSense..."
+    /hackintosh/ds-mouse &
+    DS_PID=$!
+    sleep 1
+
+    if [ -f /tmp/ds-mouse.env ]; then
+        . /tmp/ds-mouse.env
+        echo "[hackintosh] DualSense mapeado como ratón + teclado"
+    else
+        echo "[hackintosh] AVISO: ds-mouse no creó dispositivos"
+    fi
+else
+    echo "[hackintosh] ds-mouse no encontrado — DualSense pasará como gamepad"
+fi
+
 # ── Lanzar QEMU ──────────────────────────────────────
 echo ""
 echo "[hackintosh] Lanzando macOS con QEMU/KVM..."
@@ -211,18 +232,33 @@ fi
 QEMU_ARGS="$QEMU_ARGS -netdev user,id=net0,hostfwd=tcp::2222-:22"
 QEMU_ARGS="$QEMU_ARGS -device virtio-net-pci,netdev=net0"
 
-# USB HID passthrough
+# USB
 QEMU_ARGS="$QEMU_ARGS -usb"
-QEMU_ARGS="$QEMU_ARGS -device usb-ehci,id=ehci"
+QEMU_ARGS="$QEMU_ARGS -device qemu-xhci,id=xhci"
+
+# Virtual input devices (QEMU's own USB tablet/kbd, fed by input-linux)
+QEMU_ARGS="$QEMU_ARGS -device usb-kbd"
+QEMU_ARGS="$QEMU_ARGS -device usb-tablet"
+
+# DualSense mapped input → QEMU via input-linux
+if [ -n "$DS_MOUSE_EVDEV" ] && [ -e "$DS_MOUSE_EVDEV" ]; then
+    QEMU_ARGS="$QEMU_ARGS -object input-linux,id=dsmouse,evdev=$DS_MOUSE_EVDEV"
+fi
+if [ -n "$DS_KBD_EVDEV" ] && [ -e "$DS_KBD_EVDEV" ]; then
+    QEMU_ARGS="$QEMU_ARGS -object input-linux,id=dskbd,evdev=$DS_KBD_EVDEV"
+fi
+
+# Pass through non-DualSense USB HID devices (keyboards, mice)
 for usbdev in /sys/bus/usb/devices/*/bInterfaceClass; do
     class=$(cat "$usbdev" 2>/dev/null)
     if [ "$class" = "03" ]; then
         busdir=$(dirname "$usbdev")
         vendor=$(cat "$busdir/../idVendor" 2>/dev/null)
         product=$(cat "$busdir/../idProduct" 2>/dev/null)
-        if [ -n "$vendor" ] && [ -n "$product" ]; then
-            QEMU_ARGS="$QEMU_ARGS -device usb-host,vendorid=0x$vendor,productid=0x$product"
-        fi
+        [ -z "$vendor" ] || [ -z "$product" ] && continue
+        # Skip DualSense (Sony 054c:0ce6 / 054c:0df2) — handled by ds-mouse
+        [ "$vendor" = "054c" ] && continue
+        QEMU_ARGS="$QEMU_ARGS -device usb-host,vendorid=0x$vendor,productid=0x$product"
     fi
 done
 
