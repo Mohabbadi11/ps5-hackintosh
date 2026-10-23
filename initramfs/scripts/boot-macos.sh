@@ -74,14 +74,22 @@ if [ -z "$MACOS_IMG" ]; then
     fi
 
     MACOS_IMG="$USB_MNT/macos/macOS.img"
-    OVMF_CODE="$USB_MNT/macos/OVMF_CODE.fd"
-    OVMF_VARS="/tmp/OVMF_VARS.fd"
     OC_IMG="$USB_MNT/macos/OpenCore.img"
 
-    # OVMF de Alpine si no está en USB
-    if [ ! -f "$OVMF_CODE" ] && [ -f /usr/share/OVMF/OVMF_CODE.fd ]; then
+    # OVMF: buscar en USB, luego en sistema Alpine
+    if [ -f "$USB_MNT/macos/OVMF_CODE.fd" ]; then
+        OVMF_CODE="$USB_MNT/macos/OVMF_CODE.fd"
+    elif [ -f /usr/share/OVMF/OVMF_CODE.fd ]; then
         OVMF_CODE="/usr/share/OVMF/OVMF_CODE.fd"
         echo "[hackintosh] Usando OVMF del sistema"
+    fi
+
+    # OVMF_VARS: copia mutable (QEMU escribe en él)
+    OVMF_VARS="/tmp/OVMF_VARS.fd"
+    if [ -f "$USB_MNT/macos/OVMF_VARS.fd" ]; then
+        cp "$USB_MNT/macos/OVMF_VARS.fd" "$OVMF_VARS"
+    elif [ -f /usr/share/OVMF/OVMF_VARS.fd ]; then
+        cp /usr/share/OVMF/OVMF_VARS.fd "$OVMF_VARS"
     fi
 fi
 
@@ -101,8 +109,10 @@ echo "[hackintosh] macOS.img: $(du -h "$MACOS_IMG" 2>/dev/null | cut -f1)"
 echo "[hackintosh] OVMF: $OVMF_CODE"
 [ -f "$OC_IMG" ] && echo "[hackintosh] OpenCore: $OC_IMG"
 
-# Crear copia de OVMF_VARS
-cp "$OVMF_CODE" "$OVMF_VARS" 2>/dev/null
+# Crear copia de OVMF_VARS si no se hizo antes (modo embebido)
+if [ ! -f "$OVMF_VARS" ] && [ -f "$OVMF_CODE" ]; then
+    cp "$OVMF_CODE" "$OVMF_VARS" 2>/dev/null
+fi
 
 # ── CPU topology ──────────────────────────────────────
 # PS5: 8 cores / 16 threads — dar a macOS 6 cores / 12 threads
@@ -175,8 +185,16 @@ if [ -f "$OC_IMG" ]; then
     QEMU_ARGS="$QEMU_ARGS -device virtio-blk-pci,drive=OpenCore,bootindex=1"
 fi
 
-# macOS disk
-QEMU_ARGS="$QEMU_ARGS -drive id=MacOS,if=none,format=raw,file=$MACOS_IMG,cache=writeback,aio=threads"
+# macOS disk — detectar formato (qcow2 o raw)
+MACOS_FMT="raw"
+if command -v qemu-img >/dev/null 2>&1; then
+    detected=$(qemu-img info --output=json "$MACOS_IMG" 2>/dev/null | grep -o '"format": *"[^"]*"' | head -1 | sed 's/.*"format": *"//;s/"//')
+    [ -n "$detected" ] && MACOS_FMT="$detected"
+elif head -c 4 "$MACOS_IMG" 2>/dev/null | grep -q "QFI"; then
+    MACOS_FMT="qcow2"
+fi
+echo "[hackintosh] macOS.img formato: $MACOS_FMT"
+QEMU_ARGS="$QEMU_ARGS -drive id=MacOS,if=none,format=$MACOS_FMT,file=$MACOS_IMG,cache=writeback,aio=threads"
 QEMU_ARGS="$QEMU_ARGS -device virtio-blk-pci,drive=MacOS"
 
 # GPU

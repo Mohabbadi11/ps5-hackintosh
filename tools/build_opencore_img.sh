@@ -2,8 +2,11 @@
 #
 # PS5 Hackintosh — Build OpenCore disk image (qcow2)
 #
-# Creates a FAT32 disk image with the OpenCore EFI, then converts
-# to qcow2 for QEMU. Works on macOS (hdiutil) and Linux (losetup).
+# Creates a GPT disk with an ESP FAT32 partition containing the
+# OpenCore EFI, then converts to qcow2 for QEMU.
+#
+# Uses Docker on macOS (hdiutil produces images with wrong partition
+# type that OVMF rejects). On Linux, uses parted/losetup directly.
 #
 # Usage: ./tools/build_opencore_img.sh [EFI_DIR] [output.img]
 
@@ -26,53 +29,79 @@ echo "Construyendo imagen OpenCore..."
 echo "  EFI: $EFI_DIR"
 echo "  Output: $OUTPUT"
 
-DMG_TMP=$(mktemp /tmp/oc_XXXXXX.dmg)
-RAW_TMP=$(mktemp /tmp/oc_XXXXXX.raw)
-trap "rm -f '$DMG_TMP' '$RAW_TMP'" EXIT
+build_on_linux() {
+    local raw_img="$1"
+    local efi_src="$2"
 
-if command -v hdiutil &>/dev/null; then
-    # macOS: crear DMG con hdiutil
-    hdiutil create -size 256m -fs FAT32 -volname OPENCORE \
-        -layout GPTSPUD -ov "$DMG_TMP" >/dev/null
-
-    MOUNT_INFO=$(hdiutil attach "$DMG_TMP" -nobrowse -noverify 2>/dev/null)
-    DISK=$(echo "$MOUNT_INFO" | grep '/dev/disk' | head -1 | awk '{print $1}')
-    VOL=$(echo "$MOUNT_INFO" | grep '/Volumes/' | sed 's/.*\/Volumes\//\/Volumes\//')
-
-    cp -R "$EFI_DIR/EFI" "$VOL/"
-    echo "  Contenido copiado a imagen"
-
-    sync
-    hdiutil detach "$DISK" -quiet 2>/dev/null || diskutil unmountDisk "$DISK" >/dev/null 2>&1
-
-    # Convertir DMG → raw → qcow2
-    hdiutil convert "$DMG_TMP" -format UDTO -o "${RAW_TMP%.raw}" >/dev/null 2>&1 || true
-
-    if [ -f "${RAW_TMP%.raw}.cdr" ]; then
-        qemu-img convert -f raw -O qcow2 "${RAW_TMP%.raw}.cdr" "$OUTPUT"
-        rm -f "${RAW_TMP%.raw}.cdr"
-    else
-        # Alternativa directa
-        qemu-img convert -f dmg -O qcow2 "$DMG_TMP" "$OUTPUT"
-    fi
-else
-    # Linux
-    qemu-img create -f raw "$RAW_TMP" 256M
-    LOOP=$(losetup -f --show "$RAW_TMP")
+    qemu-img create -f raw "$raw_img" 256M
+    LOOP=$(losetup -f --show "$raw_img")
     parted -s "$LOOP" mklabel gpt
     parted -s "$LOOP" mkpart EFI fat32 1MiB 100%
     parted -s "$LOOP" set 1 esp on
-    partprobe "$LOOP"
+    partprobe "$LOOP" 2>/dev/null || sleep 1
     mkfs.vfat -F32 "${LOOP}p1"
 
     MNT=$(mktemp -d)
     mount "${LOOP}p1" "$MNT"
-    cp -R "$EFI_DIR/EFI" "$MNT/"
+    cp -R "$efi_src/EFI" "$MNT/"
+    sync
     umount "$MNT"
     losetup -d "$LOOP"
     rmdir "$MNT"
+}
 
+RAW_TMP="/tmp/ps5-oc-raw-$$.img"
+trap "rm -f '$RAW_TMP'" EXIT
+
+if [ "$(uname)" = "Linux" ]; then
+    build_on_linux "$RAW_TMP" "$EFI_DIR"
     qemu-img convert -f raw -O qcow2 "$RAW_TMP" "$OUTPUT"
+else
+    # macOS: usar Docker para crear la imagen con parted (ESP correcto)
+    if ! docker info >/dev/null 2>&1; then
+        echo "ERROR: Docker necesario en macOS para crear imagen OpenCore."
+        echo "hdiutil produce particiones 'Microsoft Basic Data' que OVMF rechaza."
+        exit 1
+    fi
+
+    echo "  Usando Docker para crear imagen con ESP correcto..."
+    docker run --rm --platform linux/amd64 \
+        --privileged \
+        -v "$EFI_DIR:/efi:ro" \
+        -v "$BUILD:/out" \
+        alpine:3.20 sh -c '
+        set -e
+        apk add --no-cache sgdisk dosfstools qemu-img >/dev/null 2>&1
+
+        RAW=/tmp/opencore.raw
+        FAT=/tmp/opencore-fat.img
+
+        # Crear imagen raw con GPT + partición ESP (tipo EF00)
+        dd if=/dev/zero of="$RAW" bs=1M count=256 2>/dev/null
+        sgdisk -n 1:2048:0 -t 1:EF00 "$RAW"
+
+        # Crear FAT32 aparte (254 MiB — espacio dentro de la partición ESP)
+        dd if=/dev/zero of="$FAT" bs=1M count=254 2>/dev/null
+        mkfs.vfat -F32 "$FAT"
+
+        # Montar FAT32 y copiar EFI
+        MNT=$(mktemp -d)
+        mount -o loop "$FAT" "$MNT"
+        cp -R /efi/EFI "$MNT/"
+        sync
+        umount "$MNT"
+        rmdir "$MNT"
+
+        # Insertar FAT32 en la imagen GPT en el offset correcto
+        dd if="$FAT" of="$RAW" bs=512 seek=2048 conv=notrunc 2>/dev/null
+        rm "$FAT"
+
+        # Convertir a qcow2
+        qemu-img convert -f raw -O qcow2 "$RAW" /out/OpenCore.img
+        rm "$RAW"
+
+        echo "OpenCore.img creado en Docker"
+    '
 fi
 
 echo ""
