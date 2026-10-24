@@ -1115,7 +1115,7 @@
 				Rg==
 				</data>
 				<key>boot-args</key>
-				<string>-v keepsyms=1 debug=0x144 serial=3 agdpmod=pikera npci=0x2000 revpatch=sbvmm,f16c,auto msgbuf=1048576</string>
+				<string>-v serial=3 agdpmod=pikera npci=0x2000 revpatch=sbvmm,f16c,auto</string>
 				<key>csr-active-config</key>
 				<data>
 				7/8PAA==
@@ -1141,7 +1141,6 @@
 			<key>7C436110-AB2A-4BBB-A880-FE41995C9F82</key>
 			<array>
 				<string>boot-args</string>
-				<string>ForceDisplayRotationInEFI</string>
 			</array>
 		</dict>
 		<key>LegacyOverwrite</key>

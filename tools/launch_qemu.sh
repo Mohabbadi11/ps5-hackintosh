@@ -60,6 +60,10 @@ fi
 echo "[hackintosh] Loading KVM modules..."
 sudo modprobe kvm ignore_msrs=1 report_ignored_msrs=0
 sudo modprobe kvm_amd nested=1
+# modprobe options are ignored when kvm is already loaded; set them live too
+for p in ignore_msrs:1 report_ignored_msrs:0; do
+    echo "${p#*:}" | sudo tee "/sys/module/kvm/parameters/${p%:*}" >/dev/null
+done
 
 # ── Hugepages ────────────────────────────────────
 echo "[hackintosh] Setting up hugepages (8GB)..."
@@ -69,13 +73,17 @@ ACTUAL_HP=$(cat /proc/sys/vm/nr_hugepages)
 echo "[hackintosh] Hugepages allocated: $ACTUAL_HP (requested 4096)"
 
 # ── CPU topology ─────────────────────────────────
-# Keep a power-of-2 topology: macOS libmalloc aborts launchd unless
-# logical/physical CPUs is 1, 2 or 4.
-CPUS=8
-CORES=4
+# The total vCPU count must be a power of 2 (2 threads per core): QEMU rounds
+# the topology up to one, and macOS libmalloc aborts launchd unless
+# logical/physical CPUs is 1, 2 or 4. Use all host threads, up to 16.
+HOST_THREADS=$(nproc --all)
+CPUS="${VM_CPUS:-16}"
+while [ "$CPUS" -gt "$HOST_THREADS" ] && [ "$CPUS" -gt 2 ]; do CPUS=$((CPUS / 2)); done
 THREADS=2
+CORES=$((CPUS / THREADS))
 SOCKETS=1
 MEM="8G"
+echo "[hackintosh] vCPUs: $CPUS ($CORES cores x $THREADS threads), RAM: $MEM"
 
 # ── Build QEMU command ───────────────────────────
 QEMU_CMD="sudo qemu-system-x86_64"
@@ -128,7 +136,7 @@ else
 fi
 
 # Network (user mode with SSH forwarding)
-QEMU_CMD="$QEMU_CMD -netdev user,id=net0,hostfwd=tcp::2222-:22"
+QEMU_CMD="$QEMU_CMD -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22"
 QEMU_CMD="$QEMU_CMD -device virtio-net-pci,netdev=net0"
 
 # USB + input

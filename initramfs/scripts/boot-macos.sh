@@ -115,10 +115,13 @@ if [ ! -f "$OVMF_VARS" ] && [ -f "$OVMF_CODE" ]; then
 fi
 
 # ── CPU topology ─────────────────────────────────────
-# PS5: 8 cores / 16 threads — give macOS 6 cores / 12 threads
-CPUS=12
-CORES=6
+# Total vCPUs must be a power of 2 (2 threads per core): macOS libmalloc
+# aborts launchd unless logical/physical CPUs is 1, 2 or 4. PS5: 8C/16T.
+HOST_THREADS=$(grep -c ^processor /proc/cpuinfo)
+CPUS=16
+while [ "$CPUS" -gt "$HOST_THREADS" ] && [ "$CPUS" -gt 2 ]; do CPUS=$((CPUS / 2)); done
 THREADS=2
+CORES=$((CPUS / THREADS))
 SOCKETS=1
 MEM="12G"
 
@@ -190,7 +193,7 @@ echo ""
 QEMU_ARGS=""
 QEMU_ARGS="$QEMU_ARGS -enable-kvm"
 QEMU_ARGS="$QEMU_ARGS -machine q35,accel=kvm,kernel_irqchip=on"
-QEMU_ARGS="$QEMU_ARGS -cpu host,vendor=AuthenticAMD,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,topoext=on,kvm=off"
+QEMU_ARGS="$QEMU_ARGS -cpu host,vendor=GenuineIntel,+invtsc,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,kvm=off,vmware-cpuid-freq=on"
 QEMU_ARGS="$QEMU_ARGS -smp cpus=$CPUS,cores=$CORES,threads=$THREADS,sockets=$SOCKETS"
 QEMU_ARGS="$QEMU_ARGS -m $MEM"
 QEMU_ARGS="$QEMU_ARGS -mem-prealloc"

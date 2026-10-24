@@ -1,0 +1,13 @@
+[Unit]
+Description=PS5 Hackintosh (macOS in QEMU/KVM)
+RequiresMountsFor=/mnt/macos
+
+[Service]
+Type=simple
+ExecStart=/mnt/macos/launch_qemu.sh
+ExecStop=/mnt/macos/stop_qemu.sh
+TimeoutStopSec=150
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
