@@ -10,22 +10,27 @@
 #   ./launch_qemu.sh              # VNC mode, boots the installed macOS
 #   ./launch_qemu.sh --gpu        # GPU passthrough mode
 #   ./launch_qemu.sh --recovery   # also attach BaseSystem.raw (install / repair)
+#   ./launch_qemu.sh --ps5        # rehearse the PS5 platform: no HPET, MSI-only
+#                                 # devices (NVMe disk, USB OpenCore, no NIC/audio).
+#                                 # Pair with OC_IMG/MACOS_IMG/OVMF_VARS overrides.
 
 set -euo pipefail
 
 MACOS_DIR="/mnt/macos"
 MACOS_IMG="${MACOS_IMG:-$MACOS_DIR/macOS.img}"
-OC_IMG="$MACOS_DIR/OpenCore.img"
+OC_IMG="${OC_IMG:-$MACOS_DIR/OpenCore.img}"
 RECOVERY_IMG="$MACOS_DIR/BaseSystem.raw"
 OVMF_CODE="/usr/share/edk2/x64/OVMF_CODE.4m.fd"
 OVMF_VARS_ORIG="/usr/share/edk2/x64/OVMF_VARS.4m.fd"
-OVMF_VARS="$MACOS_DIR/OVMF_VARS.4m.fd"
+OVMF_VARS="${OVMF_VARS:-$MACOS_DIR/OVMF_VARS.4m.fd}"
 
 GPU_MODE=false
 WANT_RECOVERY=false
+PS5_PLATFORM=false
 for arg in "$@"; do
     case "$arg" in
         --gpu) GPU_MODE=true ;;
+        --ps5) PS5_PLATFORM=true ;;
         --recovery) WANT_RECOVERY=true ;;
         *) echo "Unknown option: $arg"; exit 1 ;;
     esac
@@ -88,7 +93,9 @@ echo "[hackintosh] vCPUs: $CPUS ($CORES cores x $THREADS threads), RAM: $MEM"
 # ── Build QEMU command ───────────────────────────
 QEMU_CMD="sudo qemu-system-x86_64"
 QEMU_CMD="$QEMU_CMD -enable-kvm"
-QEMU_CMD="$QEMU_CMD -machine q35,accel=kvm,kernel_irqchip=on"
+MACHINE="q35,accel=kvm,kernel_irqchip=on"
+[ "$PS5_PLATFORM" = true ] && MACHINE="$MACHINE,hpet=off"
+QEMU_CMD="$QEMU_CMD -machine $MACHINE"
 QEMU_CMD="$QEMU_CMD -cpu host,vendor=GenuineIntel,+invtsc,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,kvm=off,vmware-cpuid-freq=on"
 QEMU_CMD="$QEMU_CMD -smp cpus=$CPUS,cores=$CORES,threads=$THREADS,sockets=$SOCKETS"
 QEMU_CMD="$QEMU_CMD -m $MEM"
@@ -99,13 +106,28 @@ QEMU_CMD="$QEMU_CMD -mem-path /dev/hugepages"
 QEMU_CMD="$QEMU_CMD -drive if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
 QEMU_CMD="$QEMU_CMD -drive if=pflash,format=raw,file=$OVMF_VARS"
 
+USB_BUS=""
+if [ "$PS5_PLATFORM" = true ]; then
+    # The PS5 only has MSI-capable devices: NVMe + xHCI, OpenCore on a USB stick
+    USB_BUS=",bus=xhci.0"
+    QEMU_CMD="$QEMU_CMD -device qemu-xhci,id=xhci"
+fi
+
 # OpenCore (boot disk)
 QEMU_CMD="$QEMU_CMD -drive id=OpenCore,if=none,format=qcow2,file=$OC_IMG"
-QEMU_CMD="$QEMU_CMD -device virtio-blk-pci,drive=OpenCore,bootindex=1"
+if [ "$PS5_PLATFORM" = true ]; then
+    QEMU_CMD="$QEMU_CMD -device usb-storage,bus=xhci.0,drive=OpenCore,bootindex=1"
+else
+    QEMU_CMD="$QEMU_CMD -device virtio-blk-pci,drive=OpenCore,bootindex=1"
+fi
 
 # macOS disk
 QEMU_CMD="$QEMU_CMD -drive id=MacOS,if=none,format=qcow2,file=$MACOS_IMG,cache=writeback,aio=threads"
-QEMU_CMD="$QEMU_CMD -device virtio-blk-pci,drive=MacOS"
+if [ "$PS5_PLATFORM" = true ]; then
+    QEMU_CMD="$QEMU_CMD -device nvme,drive=MacOS,serial=PS5NVME0001"
+else
+    QEMU_CMD="$QEMU_CMD -device virtio-blk-pci,drive=MacOS"
+fi
 
 # Recovery image (for installation)
 if [ "$HAS_RECOVERY" = true ]; then
@@ -136,18 +158,26 @@ else
 fi
 
 # Network (user mode with SSH forwarding)
-QEMU_CMD="$QEMU_CMD -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22"
-QEMU_CMD="$QEMU_CMD -device virtio-net-pci,netdev=net0"
+if [ "$PS5_PLATFORM" = true ]; then
+    QEMU_CMD="$QEMU_CMD -nic none"   # virtio-net needs INTx; the PS5 NIC has no macOS driver
+else
+    QEMU_CMD="$QEMU_CMD -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22"
+    QEMU_CMD="$QEMU_CMD -device virtio-net-pci,netdev=net0"
+fi
 
 # USB + input
-QEMU_CMD="$QEMU_CMD -usb"
-QEMU_CMD="$QEMU_CMD -device qemu-xhci,id=xhci"
-QEMU_CMD="$QEMU_CMD -device usb-kbd"
-QEMU_CMD="$QEMU_CMD -device usb-tablet"
+if [ "$PS5_PLATFORM" = false ]; then
+    QEMU_CMD="$QEMU_CMD -usb"
+    QEMU_CMD="$QEMU_CMD -device qemu-xhci,id=xhci"
+fi
+QEMU_CMD="$QEMU_CMD -device usb-kbd$USB_BUS"
+QEMU_CMD="$QEMU_CMD -device usb-tablet$USB_BUS"
 
 # Audio (virtual)
-QEMU_CMD="$QEMU_CMD -device intel-hda"
-QEMU_CMD="$QEMU_CMD -device hda-duplex"
+if [ "$PS5_PLATFORM" = false ]; then
+    QEMU_CMD="$QEMU_CMD -device intel-hda"
+    QEMU_CMD="$QEMU_CMD -device hda-duplex"
+fi
 
 # macOS specifics
 QEMU_CMD="$QEMU_CMD -rtc base=localtime,driftfix=slew"
@@ -155,6 +185,9 @@ QEMU_CMD="$QEMU_CMD -global ICH9-LPC.disable_s3=1"
 QEMU_CMD="$QEMU_CMD -global ICH9-LPC.disable_s4=1"
 QEMU_CMD="$QEMU_CMD -device 'isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc'"
 QEMU_CMD="$QEMU_CMD -smbios type=2"
+
+# Extra QEMU arguments for experiments, e.g. QEMU_EXTRA="-device ivshmem-plain,memdev=x"
+[ -n "${QEMU_EXTRA:-}" ] && QEMU_CMD="$QEMU_CMD $QEMU_EXTRA"
 
 # Debug: serial log + monitor socket
 QEMU_CMD="$QEMU_CMD -serial file:/mnt/macos/serial.log"

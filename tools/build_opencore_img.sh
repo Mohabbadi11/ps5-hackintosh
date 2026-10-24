@@ -97,11 +97,12 @@ else
         rm "$FAT"
 
         # Convert to qcow2
-        qemu-img convert -f raw -O qcow2 "$RAW" /out/OpenCore.img
+        qemu-img convert -f raw -O qcow2 "$RAW" /out/OpenCore.tmp.img
         rm "$RAW"
 
         echo "OpenCore.img created in Docker"
     '
+    mv "$BUILD/OpenCore.tmp.img" "$OUTPUT"
 fi
 
 echo ""
