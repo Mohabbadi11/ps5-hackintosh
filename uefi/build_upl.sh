@@ -33,6 +33,7 @@ s = s.replace("  PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcatRealTimeClockRun
 s = re.sub(r"(?m)^(\s*)TimerLib\|(Ps5Pkg/.*)$",
            r"\1TimerLib|\2\n\1RealTimeClockLib|Ps5Pkg/Library/Ps5RealTimeClockLib/Ps5RealTimeClockLib.inf\n"
            r"\1TimeBaseLib|EmbeddedPkg/Library/TimeBaseLib/TimeBaseLib.inf", s, count=1)
+s = re.sub(r"(?m)^(\s*)PciSegmentLib\|.*$", r"\1PciSegmentLib|MdePkg/Library/BasePciSegmentLibPci/BasePciSegmentLibPci.inf", s)
 s = re.sub(r"(?m)^.*gPcAtChipsetPkgTokenSpaceGuid\.PcdRtc.*\n", "", s)    # RTC ports are unused now
 s = s.replace("UefiPayloadPkg/UefiPayloadPkg.fdf", "UefiPayloadPkg/Ps5Payload.fdf")
 open("UefiPayloadPkg/Ps5Payload.dsc", "w").write(s)
@@ -43,5 +44,5 @@ open("UefiPayloadPkg/Ps5Payload.fdf", "w").write(f)
 PY
     python3 UefiPayloadPkg/UniversalPayloadBuild.py -t CLANGDWARF -c UefiPayloadPkg/Ps5Payload.dsc \
         -D TIMER_SUPPORT=LAPIC -D SERIAL_DRIVER_ENABLE=FALSE -D PS2_KEYBOARD_ENABLE=FALSE -D PS2_MOUSE_ENABLE=FALSE \
-        -D SD_ENABLE=FALSE -D ATA_ENABLE=FALSE -D NETWORK_DRIVER_ENABLE=FALSE -D MAX_LOGICAL_PROCESSORS=1 "${ARGS[@]}"
+        -D SD_ENABLE=FALSE -D ATA_ENABLE=FALSE -D NETWORK_DRIVER_ENABLE=FALSE -D MAX_LOGICAL_PROCESSORS=1 -D PCIE_BASE_SUPPORT=FALSE "${ARGS[@]}"
 ' bash "$@"
