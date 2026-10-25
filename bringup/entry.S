@@ -21,7 +21,7 @@ startup_64:
     .globl ps5_isr
 ps5_isr:
     pushq   %rax
-    movq    $0xFEE000B0, %rax           /* local APIC EOI register */
+    movl    $0xFEE000B0, %eax           /* local APIC EOI register (movl zero-extends; movq would sign-extend it) */
     movl    $0, (%rax)
     popq    %rax
     iretq
