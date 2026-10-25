@@ -43,11 +43,11 @@ RAM = [
 ]
 RESERVED = [
     (0x7a000000, 0x7f000000),     # stage 1 + kexec segments (kernel image, boot_params, initrd)
-    (0x7f9d0000, 0xc4400000),     # firmware, ACPI tables (RSDP 0x7fd8e014), NVS, PCI holes
+    (0x7f9d0000, 0x80000000),     # firmware, ACPI tables (RSDP 0x7fd8e014), NVS
     (0x300000000, 0x300100000),   # stage-1 marks and console log
 ]
 MMIO = [
-    (0xc4400000, 0x100000000),
+    (0x80000000, 0x100000000),    # PCI MMIO apertures (BARs, ECAM 0xF0000000, LAPIC): must be MMIO for PciHostBridgeDxe
     (0x450000000, 0x470000000),   # VRAM carve-out (framebuffer lives here)
     (0x47f300000, 0x480000000),
 ]

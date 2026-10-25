@@ -93,25 +93,28 @@ DrawGlyph (
 
 STATIC
 VOID
-Scroll (
-  VOID
+ClearRow (
+  UINT32  Row
   )
 {
   //
-  // Out of rows: wipe the screen and start over at the top (cheap, keeps the newest output visible).
+  // The screen is a ring of text rows: when the bottom is reached output restarts at the top, wiping one row at a
+  // time, so the most recent lines (and the ones just before them) always stay readable.
   //
   UINT32  Y;
   UINT32  X;
   UINT32  *P;
 
-  for (Y = 0; Y < FB_H; Y++) {
+  for (Y = Row * 16; Y < Row * 16 + 16; Y++) {
     P = (UINT32 *)(UINTN)(FbBase () + (UINT64)Y * FB_PITCH);
     for (X = 0; X < FB_W; X++) {
       P[X] = 0xFF101040U;
     }
-  }
 
-  AsmWbinvd ();
+    for (X = 0; X < FB_W * 4; X += 64) {
+      AsmFlushCacheLine ((VOID *)((UINTN)P + X));
+    }
+  }
 }
 
 RETURN_STATUS
@@ -151,26 +154,19 @@ SerialPortWrite (
 
     if (Ch == '\n') {
       S->Col = 0;
-      S->Row++;
-    } else {
-      if (S->Col >= COLS) {
-        S->Col = 0;
-        S->Row++;
-      }
-
-      if (S->Row >= ROWS) {
-        Scroll ();
-        S->Row = 0;
-      }
-
-      DrawGlyph (S->Col, S->Row, Ch);
-      S->Col++;
+      S->Row = (S->Row + 1) % ROWS;
+      ClearRow (S->Row);
+      continue;
     }
 
-    if (S->Row >= ROWS) {
-      Scroll ();
-      S->Row = 0;
+    if (S->Col >= COLS) {
+      S->Col = 0;
+      S->Row = (S->Row + 1) % ROWS;
+      ClearRow (S->Row);
     }
+
+    DrawGlyph (S->Col, S->Row, Ch);
+    S->Col++;
   }
 
   return NumberOfBytes;
