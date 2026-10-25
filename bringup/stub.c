@@ -189,6 +189,14 @@ static void stage5_launch(u64 bp)
     *(volatile u64 *)0x300001f10ULL = fbaddr;
     if (fbpatch) *(volatile u64 *)fbpatch = fbaddr;
     puts_("framebuffer at "); put_hex(fbaddr, 12); puts_("\n");
+    /* The crash kexec shuts the local APIC down (software-disable); UEFI's LocalApicTimerDxe assumes it is enabled,
+     * otherwise BdsWait never sees a timer tick and the boot manager sleeps forever. */
+    volatile u32 *lapic = (volatile u32 *)0xFEE00000ULL;
+    puts_("LAPIC svr before "); put_hex(lapic[0xF0 / 4], 8);
+    lapic[0x80 / 4] = 0;                              /* task priority: accept everything */
+    lapic[0xF0 / 4] = 0x1FF;                          /* software enable, spurious vector 0xFF */
+    lapic[0x320 / 4] = 0x10000;                       /* timer masked until UEFI programs it */
+    puts_(" after "); put_hex(lapic[0xF0 / 4], 8); puts_("  id "); put_hex(lapic[0x20 / 4], 8); puts_("\n");
     puts_("\njumping to the UEFI payload...\n");
     __asm__ volatile("wbinvd" ::: "memory");
     *(volatile u64 *)(rsp - 8) = 0;                  /* fake return address, rsp ends up 8 mod 16 as after a call */
