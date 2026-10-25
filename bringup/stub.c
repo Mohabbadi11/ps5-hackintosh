@@ -44,7 +44,7 @@ static inline void cpuid(u32 leaf, u32 sub, u32 *a, u32 *b, u32 *c, u32 *d)
 }
 
 
-#if VARIANT == 4 || VARIANT == 5
+#if VARIANT == 4 || VARIANT == 5 || VARIANT == 6
 #include "font8x16.h"
 #define FB_BASE   0x46a000000ULL           /* VRAM carve-out is system RAM: VRAM offset N == phys 0x450000000 + N */
 #define FB_PITCH  10240u
@@ -144,7 +144,7 @@ static void stage4_report(u64 bp)
 }
 #endif
 
-#if VARIANT == 5
+#if VARIANT == 5 || VARIANT == 6
 /* Stage 1 as a loader for the EDK2 Universal Payload: the kexec initrd is a "PS5BNDL1" bundle (uefi/mkbundle.py) with
  * segments to copy to fixed physical addresses, the entry point, the HOB list address (rcx) and a stack. */
 
@@ -200,11 +200,89 @@ static void copy_bytes(u64 dst, u64 src, u64 n)
     __asm__ volatile("cld; rep movsb" : "+D"(dst), "+S"(src), "+c"(n) :: "memory");
 }
 
+/* XNU stores the framebuffer address in 32 bits, so the picture is drawn into a RAM alias below 4 GiB (ALIAS_BASE, 16 MiB
+ * window, excluded from the RAM given to UEFI) and an application processor copies it onto the real scanout buffer. */
+#define ALIAS_BASE  0x3b000000ULL
+#define AP_TRAMP    0x62000ULL
+#define AP_DATA     0x63000ULL
+#define AP_PML4     0x64000ULL
+#define AP_PDPT     0x65000ULL
+#define AP_PD       0x66000ULL
+extern char ap_tramp_start[], ap_tramp_end[];
+
+static void wait_tsc(u64 ticks)
+{
+    u64 s = rdtsc();
+    while (rdtsc() - s < ticks) __asm__ volatile("pause");
+}
+
+static void send_ipi(volatile u32 *lapic, u32 apic_id, u32 lo)
+{
+    if (rdmsr(0x1B) & (1ULL << 10)) {                  /* x2APIC: one 64-bit ICR write */
+        u32 l = lo, h = apic_id;
+        __asm__ volatile("wrmsr" :: "c"(0x830), "a"(l), "d"(h));
+        return;
+    }
+    lapic[0x310 / 4] = apic_id << 24;
+    lapic[0x300 / 4] = lo;
+    for (int i = 0; i < 1000000 && (lapic[0x300 / 4] & (1u << 12)); i++) __asm__ volatile("pause");
+}
+
+/* Returns the number of frames copied in 50 ms (0 = the core did not come up). */
+static u64 start_mirror(u64 src, u64 dst, u64 bytes, volatile u32 *lapic, u32 ap_id)
+{
+    copy_bytes(AP_TRAMP, (u64)(unsigned long)ap_tramp_start, (u64)(unsigned long)(ap_tramp_end - ap_tramp_start));
+    volatile u64 *d = (volatile u64 *)AP_DATA;
+    for (int i = 0; i < 16; i++) d[i] = 0;
+    d[0] = src; d[1] = dst; d[2] = bytes / 8; d[4] = AP_PML4;
+    volatile u64 *pml4 = (volatile u64 *)AP_PML4, *pdpt = (volatile u64 *)AP_PDPT, *pd = (volatile u64 *)AP_PD;
+    for (int i = 0; i < 512; i++) { pml4[i] = 0; pdpt[i] = 0; pd[i] = ((u64)i << 21) | 0x83; }
+    pml4[0] = AP_PDPT | 3;
+    pdpt[0] = AP_PD | 3;                                  /* first GiB: 2 MiB pages, write-back (code, alias, stack) */
+    pdpt[17] = 0x440000000ULL | 0x83 | (1ULL << 12);      /* VRAM carve-out GiB: 1 GiB page, PAT index 4 = write-combining */
+    __asm__ volatile("wbinvd" ::: "memory");
+    send_ipi(lapic, ap_id, 0x4500);                       /* INIT, level assert */
+    wait_tsc(16000000);
+    send_ipi(lapic, ap_id, 0x4600 | (u32)(AP_TRAMP >> 12));
+    wait_tsc(400000);
+    send_ipi(lapic, ap_id, 0x4600 | (u32)(AP_TRAMP >> 12));
+    wait_tsc(80000000);
+    return d[8];
+}
+
 static void zero_bytes(u64 dst, u64 n)
 {
     __asm__ volatile("cld; rep stosb" : "+D"(dst), "+c"(n) : "a"(0) : "memory");
 }
 
+static u32 lapic_id_now(void)
+{
+    if (rdmsr(0x1B) & (1ULL << 10)) return (u32)rdmsr(0x802);
+    return *(volatile u32 *)0xFEE00020ULL >> 24;
+}
+
+#if VARIANT == 6
+/* Mirror-core probe: fill the alias with bars, start the mirror core and go straight back to Linux. If the picture shows
+ * up on the screen (with Linux booting behind it) INIT/SIPI, the trampoline and the page tables work. Leaves the
+ * number of frames the core copied in the marks. */
+static u64 stage6_probe(u64 realfb, u64 *info)
+{
+    static const u32 bars[8] = { 0xFFFFFFFF, 0xFFFFFF00, 0xFF00FFFF, 0xFF00FF00, 0xFFFF00FF, 0xFFFF0000, 0xFF0000FF, 0xFF202020 };
+    volatile u32 *a = (volatile u32 *)ALIAS_BASE;
+    for (u64 y = 0; y < FB_H; y++)
+        for (u32 x = 0; x < FB_W; x++)
+            a[y * (FB_PITCH / 4) + x] = bars[x * 8 / FB_W];
+    __asm__ volatile("wbinvd" ::: "memory");
+    u32 ap_id = 15;
+    if ((lapic_id_now() & 0xFF) == ap_id) ap_id = 14;
+    info[0] = ap_id;
+    info[1] = lapic_id_now();
+    info[2] = rdmsr(0x1B);
+    return start_mirror(ALIAS_BASE, realfb, (u64)FB_PITCH * FB_H, (volatile u32 *)0xFEE00000ULL, ap_id);
+}
+#endif
+
+#if VARIANT == 5
 static void stage5_launch(u64 bp)
 {
     u64 img = (u64)*(volatile u32 *)(bp + 0x218) | ((u64)*(volatile u32 *)(bp + 0xC0) << 32);
@@ -221,7 +299,7 @@ static void stage5_launch(u64 bp)
     u64 entry = *(volatile u64 *)(img + 8), rcx = *(volatile u64 *)(img + 16), rsp = *(volatile u64 *)(img + 24);
     u64 fbpatch = *(volatile u64 *)(img + 32);
     u32 count = *(volatile u32 *)(img + 40);
-    u64 fbaddr = (u64)(unsigned long)fb;
+    u64 realfb = (u64)(unsigned long)fb, fbaddr = realfb;
     puts_("entry "); put_hex(entry, 12); puts_("  hob list "); put_hex(rcx, 12); puts_("  rsp "); put_hex(rsp, 12);
     puts_("  segments "); put_hex(count, 2); puts_("\n");
     for (u32 i = 0; i < count; i++) {
@@ -230,6 +308,17 @@ static void stage5_launch(u64 bp)
         puts_("  copy "); put_hex(dest, 12); puts_(" <- "); put_hex(size, 8); puts_(" bytes\n");
         if (off == ~0ULL) zero_bytes(dest, size); else copy_bytes(dest, img + off, size);
     }
+#ifdef MIRROR
+    /* from here on the picture lives in the RAM alias: seed it with what is on screen, then let the mirror core run */
+    copy_bytes(ALIAS_BASE, realfb, (u64)FB_PITCH * FB_H);
+    fb = (volatile u32 *)ALIAS_BASE;
+    u32 ap_id = 15;
+    if ((lapic_id_now() & 0xFF) == ap_id) ap_id = 14;
+    fbaddr = ALIAS_BASE;
+    u64 frames = start_mirror(ALIAS_BASE, realfb, (u64)FB_PITCH * FB_H, (volatile u32 *)0xFEE00000ULL, ap_id);
+    puts_("mirror core apic id "); put_hex(ap_id, 2); puts_(": frames in 50 ms "); put_hex(frames, 8);
+    puts_("  real fb "); put_hex(realfb, 12); puts_("  alias "); put_hex(ALIAS_BASE, 12); puts_("\n");
+#endif
     /* hand the cursor and the framebuffer address over to the UEFI console (Ps5FbSerialPortLib keeps its state at
      * phys 0x300001f00) and patch the GOP HOB inside the copied HOB list */
     volatile u32 *cs = (volatile u32 *)0x300001f00ULL;
@@ -291,6 +380,7 @@ static void stage5_launch(u64 bp)
                      :: "r"(rcx), "r"(rsp - 8), "r"(entry) : "memory");
     __builtin_unreachable();
 }
+#endif
 #endif
 
 /* The image was built 2 MiB longer than the real kernel (stub in front); kexec sized the load area with
@@ -405,6 +495,18 @@ void stage1_main(u64 boot_params)
                 __asm__ volatile("pause");
         }
         m[n++] = logn;
+        m[1] = n;
+    }
+#endif
+#if VARIANT == 6
+    {
+        u64 fbaddr = find_fb();
+        m[n++] = fbaddr;
+        if (fbaddr) {
+            u64 info[3];
+            u64 frames = stage6_probe(fbaddr, info);
+            m[n++] = frames; m[n++] = info[0]; m[n++] = info[1]; m[n++] = info[2];
+        }
         m[1] = n;
     }
 #endif
