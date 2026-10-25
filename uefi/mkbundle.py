@@ -128,7 +128,8 @@ def build_hobs(fvs):
     # One root bridge covering buses 00-7f; resources were assigned by the console firmware, keep them.
     ap = lambda b, l: struct.pack("<QQQ", b, l, 0)
     rb = struct.pack("<IQQBBQ", 0, 0, 0, 1, 0, 0)                               # segment, supports, attrs, dma4g, noext, alloc
-    rb += ap(0x00, 0x7f) + ap(0x2000, 0xffff) + ap(0x80000000, 0xe06fffff) + ap(0, 0) + ap(0, 0) + ap(0, 0)
+    empty = ap(0xFFFFFFFFFFFFFFFF, 0)                                           # an unused aperture is Base=MAX, Limit=0
+    rb += ap(0x00, 0x7f) + ap(0x2000, 0xffff) + ap(0x80000000, 0xe06fffff) + empty + empty + empty
     rb += struct.pack("<II", 0x0a0841d0, 0)                                     # EISA PNP0A08, UID 0
     pci = generic_header(4 + 2 + len(rb)) + struct.pack("<BB", 1, 1) + rb
     body += guid_hob(GUID_PCI_ROOT, pci)
