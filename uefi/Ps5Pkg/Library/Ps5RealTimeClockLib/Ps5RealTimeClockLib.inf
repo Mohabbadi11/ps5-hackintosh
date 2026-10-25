@@ -1,0 +1,23 @@
+## @file
+#  Software RealTimeClockLib: the PS5 has no CMOS RTC (port 0x70/0x71 floats), so the clock is a fixed epoch advanced
+#  by the TSC. LibSetTime re-bases it.
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Ps5RealTimeClockLib
+  FILE_GUID                      = 0e5a7c92-4f13-4b86-a0d7-5c1e9b3f2a68
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = RealTimeClockLib
+
+[Sources]
+  Ps5RealTimeClockLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  TimeBaseLib

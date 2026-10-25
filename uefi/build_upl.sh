@@ -27,7 +27,19 @@ s = re.sub(r"(?m)^(\s*)PlatformHookLib\|UefiPayloadPkg/Library/PlatformHookLib/P
 s = re.sub(r"(?m)^(\s*)ResetSystemLib\|UefiPayloadPkg/Library/ResetSystemLib/ResetSystemLib.inf",
            r"\1ResetSystemLib|Ps5Pkg/Library/Ps5ResetSystemLib/Ps5ResetSystemLib.inf", s)
 s = re.sub(r"(?m)^(\s*)TimerLib\|.*$", r"\1TimerLib|Ps5Pkg/Library/Ps5TscTimerLib/Ps5TscTimerLib.inf", s)
+# the PS5 has no CMOS RTC: swap the PC RTC driver for the generic one backed by a software clock
+s = s.replace("  PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcatRealTimeClockRuntimeDxe.inf",
+              "  EmbeddedPkg/RealTimeClockRuntimeDxe/RealTimeClockRuntimeDxe.inf")
+s = re.sub(r"(?m)^(\s*)TimerLib\|(Ps5Pkg/.*)$",
+           r"\1TimerLib|\2\n\1RealTimeClockLib|Ps5Pkg/Library/Ps5RealTimeClockLib/Ps5RealTimeClockLib.inf\n"
+           r"\1TimeBaseLib|EmbeddedPkg/Library/TimeBaseLib/TimeBaseLib.inf", s, count=1)
+s = re.sub(r"(?m)^.*gPcAtChipsetPkgTokenSpaceGuid\.PcdRtc.*\n", "", s)    # RTC ports are unused now
+s = s.replace("UefiPayloadPkg/UefiPayloadPkg.fdf", "UefiPayloadPkg/Ps5Payload.fdf")
 open("UefiPayloadPkg/Ps5Payload.dsc", "w").write(s)
+f = open("UefiPayloadPkg/UefiPayloadPkg.fdf").read()
+f = f.replace("  INF PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcatRealTimeClockRuntimeDxe.inf",
+              "  INF EmbeddedPkg/RealTimeClockRuntimeDxe/RealTimeClockRuntimeDxe.inf")
+open("UefiPayloadPkg/Ps5Payload.fdf", "w").write(f)
 PY
     python3 UefiPayloadPkg/UniversalPayloadBuild.py -t CLANGDWARF -c UefiPayloadPkg/Ps5Payload.dsc \
         -D TIMER_SUPPORT=LAPIC -D SERIAL_DRIVER_ENABLE=FALSE -D PS2_KEYBOARD_ENABLE=FALSE -D PS2_MOUSE_ENABLE=FALSE \
