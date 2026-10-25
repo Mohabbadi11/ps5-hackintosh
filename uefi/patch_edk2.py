@@ -82,3 +82,27 @@ if "PS5 PATCH" not in text:
            "}\n")
     open(path, "w").write(text.replace(old, new))
     print("patched", path)
+
+# ---- GraphicsOutputDxe: do not let PCI attribute handling veto the GOP, and say what happens ---------------------------
+# OpenCore reported "Missing compatible GOP": the driver kept being started for every PCI controller (mDriverStarted
+# never became TRUE), so one of the late steps of Start() fails for the GPU. The previous OS already enabled the GPU
+# (I/O, memory, bus master), so a failure of PciIo->Attributes() is ignored, and every later step logs its status.
+path = "UefiPayloadPkg/GraphicsOutputDxe/GraphicsOutput.c"
+text = open(path).read()
+if "PS5 PATCH PCI" not in text:
+    old1 = "  if (EFI_ERROR (Status)) {\n    goto FreeMemory;\n  }\n"
+    new1 = ("  DEBUG ((DEBUG_INFO, \"[%a]: PciIo attributes: %r (ignored)\\n\", gEfiCallerBaseName, Status));\n"
+            "  Status = EFI_SUCCESS;  // PS5 PATCH PCI\n"
+            "  if (FALSE) {\n    goto FreeMemory;  // keeps the label used\n  }\n")
+    old2 = "  if (RETURN_ERROR (ReturnStatus)) {\n    Status = EFI_OUT_OF_RESOURCES;"
+    new2 = ("  DEBUG ((DEBUG_INFO, \"[%a]: FrameBufferBltConfigure: %r\\n\", gEfiCallerBaseName, ReturnStatus));\n" + old2)
+    old3 = ("  if (!EFI_ERROR (Status)) {\n    Status = gBS->OpenProtocol (\n                    Controller,\n"
+            "                    &gEfiPciIoProtocolGuid,\n                    (VOID **)&Private->PciIo,")
+    new3 = ("  DEBUG ((DEBUG_INFO, \"[%a]: GOP install: %r\\n\", gEfiCallerBaseName, Status));\n" + old3)
+    old4 = "    if (!EFI_ERROR (Status)) {\n      mDriverStarted = TRUE;"
+    new4 = ("    DEBUG ((DEBUG_INFO, \"[%a]: open as child: %r\\n\", gEfiCallerBaseName, Status));\n" + old4)
+    for o in (old1, old2, old3, old4):
+        assert text.count(o) == 1, o
+    text = text.replace(old1, new1).replace(old2, new2).replace(old3, new3).replace(old4, new4)
+    open(path, "w").write(text)
+    print("patched PCI/debug", path)
