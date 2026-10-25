@@ -95,8 +95,12 @@ QEMU_CMD="sudo qemu-system-x86_64"
 QEMU_CMD="$QEMU_CMD -enable-kvm"
 MACHINE="q35,accel=kvm,kernel_irqchip=on"
 [ "$PS5_PLATFORM" = true ] && MACHINE="$MACHINE,hpet=off"
+[ "${VM_NO_PIT:-0}" = 1 ] && MACHINE="$MACHINE,pit=off"
 QEMU_CMD="$QEMU_CMD -machine $MACHINE"
-QEMU_CMD="$QEMU_CMD -cpu host,vendor=GenuineIntel,+invtsc,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,kvm=off,vmware-cpuid-freq=on"
+CPU_FLAGS="host,vendor=GenuineIntel,+invtsc,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,kvm=off"
+# vmware-cpuid-freq hands macOS the TSC frequency; real hardware has no such leaf
+[ "${VM_NO_TSC_HINT:-0}" = 1 ] || CPU_FLAGS="$CPU_FLAGS,vmware-cpuid-freq=on"
+QEMU_CMD="$QEMU_CMD -cpu $CPU_FLAGS"
 QEMU_CMD="$QEMU_CMD -smp cpus=$CPUS,cores=$CORES,threads=$THREADS,sockets=$SOCKETS"
 QEMU_CMD="$QEMU_CMD -m $MEM"
 QEMU_CMD="$QEMU_CMD -mem-prealloc"
@@ -152,7 +156,12 @@ else
     echo "[hackintosh] VNC mode — connect from Mac with:"
     echo "    open vnc://192.168.1.200:5900"
     echo ""
-    QEMU_CMD="$QEMU_CMD -device vmware-svga,vgamem_mb=128"
+    # VM_DISPLAY: vmware (default) | std (plain VGA) | ramfb (UEFI GOP framebuffer only)
+    case "${VM_DISPLAY:-vmware}" in
+        std)    QEMU_CMD="$QEMU_CMD -device VGA,vgamem_mb=64" ;;
+        ramfb)  QEMU_CMD="$QEMU_CMD -device ramfb" ;;
+        *)      QEMU_CMD="$QEMU_CMD -device vmware-svga,vgamem_mb=128" ;;
+    esac
     QEMU_CMD="$QEMU_CMD -object secret,id=vnc-pass,data=1234"
     QEMU_CMD="$QEMU_CMD -vnc :0,password-secret=vnc-pass"
 fi
@@ -183,7 +192,9 @@ fi
 QEMU_CMD="$QEMU_CMD -rtc base=localtime,driftfix=slew"
 QEMU_CMD="$QEMU_CMD -global ICH9-LPC.disable_s3=1"
 QEMU_CMD="$QEMU_CMD -global ICH9-LPC.disable_s4=1"
-QEMU_CMD="$QEMU_CMD -device 'isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc'"
+if [ "${VM_NO_APPLESMC:-0}" != 1 ]; then
+    QEMU_CMD="$QEMU_CMD -device 'isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc'"
+fi
 QEMU_CMD="$QEMU_CMD -smbios type=2"
 
 # Extra QEMU arguments for experiments, e.g. QEMU_EXTRA="-device ivshmem-plain,memdev=x"
