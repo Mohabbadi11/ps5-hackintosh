@@ -148,36 +148,17 @@ static void stage4_report(u64 bp)
 /* Stage 1 as a loader for the EDK2 Universal Payload: the kexec initrd is a "PS5BNDL1" bundle (uefi/mkbundle.py) with
  * segments to copy to fixed physical addresses, the entry point, the HOB list address (rcx) and a stack. */
 
-extern char ps5_isr[];
-static u8 idt_mem[4096] __attribute__((aligned(16)));
 
 /* The crashed Linux left interrupts pending/armed (vectors 0xEC and 0xFD in IRR, MSI-capable devices still bus
  * mastering). UEFI would take them with no handler, never send an EOI and the in-service bit would then block every
  * lower-priority vector, including its own timer tick. Drain what is pending and silence the devices first. */
 static void quiesce_interrupts(volatile u32 *lapic)
 {
-    u16 cs;
-    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
-    u64 h = (u64)(unsigned long)ps5_isr;
-    for (int v = 0; v < 256; v++) {
-        volatile u8 *e = idt_mem + v * 16;
-        e[0] = h & 0xFF; e[1] = (h >> 8) & 0xFF;      /* offset 15:0 */
-        e[2] = cs & 0xFF; e[3] = cs >> 8;             /* selector */
-        e[4] = 0; e[5] = 0x8E;                        /* IST 0, present, interrupt gate */
-        e[6] = (h >> 16) & 0xFF; e[7] = (h >> 24) & 0xFF;
-        e[8] = (h >> 32) & 0xFF; e[9] = (h >> 40) & 0xFF; e[10] = (h >> 48) & 0xFF; e[11] = (h >> 56) & 0xFF;
-        e[12] = e[13] = e[14] = e[15] = 0;
-    }
-    struct { u16 limit; u64 base; } __attribute__((packed)) idtr = { 4095, (u64)(unsigned long)idt_mem };
-    __asm__ volatile("lidt %0" :: "m"(idtr));
-
+    /* No interrupt window here: whatever is still pending is acknowledged by UEFI's own (patched) handler. */
     lapic[0x350 / 4] = 0x10000;                       /* LINT0 masked */
     lapic[0x360 / 4] = 0x10000;                       /* LINT1 masked */
-    lapic[0x80 / 4] = 0;
-    lapic[0xF0 / 4] = 0x1FF;
-    __asm__ volatile("sti");
-    for (u64 t = rdtsc(); rdtsc() - t < 3000000; ) __asm__ volatile("pause");   /* ~2 ms for the pending vectors */
-    __asm__ volatile("cli");
+    lapic[0x80 / 4] = 0;                              /* task priority: accept everything */
+    lapic[0xF0 / 4] = 0x1FF;                          /* software enable, spurious vector 0xFF */
 }
 
 /* Silence message-signalled interrupts at the source: clear MSI enable / MSI-X enable in the capability lists of every

@@ -58,3 +58,27 @@ if "PS5 PATCH WC" not in text:
     text = text.replace(wc_old, wc_new, 1)
     open(path, "w").write(text)
     print("patched WC", path)
+
+
+# ---- CpuExceptionHandlerLib: acknowledge external interrupts nobody registered a handler for --------------------------
+# The previous OS (Linux, killed by the crash kexec) leaves vectors such as 0xEC/0xFD pending in the local APIC and its
+# devices may still raise MSIs. The stock handler returns from an unhandled external interrupt without an EOI, so the
+# in-service bit stays set and blocks every lower-priority vector, including UEFI's own timer tick (BdsWait then waits
+# forever). Send the EOI, except for the spurious vector 0xFF which has no in-service bit.
+path = "UefiCpuPkg/Library/CpuExceptionHandlerLib/PeiDxeSmmCpuException.c"
+text = open(path).read()
+if "PS5 PATCH" not in text:
+    old = ("    if (ReservedVectors[ExceptionType].Attribute != EFI_VECTOR_HANDOFF_HOOK_BEFORE) {\n"
+           "      CpuDeadLoop ();\n"
+           "    }\n"
+           "  }\n"
+           "}\n")
+    assert old in text, "unexpected PeiDxeSmmCpuException.c contents"
+    new = old[:-len("  }\n}\n")] + (
+           "  } else if (ExceptionType != 0xFF) {\n"
+           "    // PS5 PATCH: unhandled external interrupt, send the local APIC EOI\n"
+           "    *(volatile UINT32 *)(UINTN)0xFEE000B0 = 0;\n"
+           "  }\n"
+           "}\n")
+    open(path, "w").write(text.replace(old, new))
+    print("patched", path)
