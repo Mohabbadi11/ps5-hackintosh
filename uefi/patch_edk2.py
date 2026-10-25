@@ -38,3 +38,23 @@ if "PS5 PATCH" not in text:
     assert old in text, "unexpected GraphicsOutput.c contents"
     open(path, "w").write(text.replace(old, new))
     print("patched", path)
+
+# ---- GraphicsOutputDxe: the framebuffer must not be cached ---------------------------------------------------------------
+# The scanout engine reads DRAM. The carve-out descriptor only declares UC/WC as capabilities, so the CPU would map it
+# write-back and the Blt output would sit in the caches. Ask the GCD for write-combining on the framebuffer range.
+text = open(path).read()
+if "PS5 PATCH WC" not in text:
+    inc_old = '#include "GraphicsOutput.h"\n'
+    wc_old = "        FrameBufferBase = GraphicsInfo->FrameBufferBase;\n"
+    assert inc_old in text and wc_old in text
+    text = text.replace(inc_old, inc_old + "#include <Library/DxeServicesTableLib.h>\n", 1)
+    wc_new = (wc_old +
+              "        // PS5 PATCH WC\n"
+              "        gDS->SetMemorySpaceAttributes (\n"
+              "               FrameBufferBase,\n"
+              "               (GraphicsInfo->FrameBufferSize + 0xFFF) & ~0xFFFULL,\n"
+              "               EFI_MEMORY_WC\n"
+              "               );\n")
+    text = text.replace(wc_old, wc_new, 1)
+    open(path, "w").write(text)
+    print("patched WC", path)
