@@ -235,6 +235,7 @@ static void stage5_launch(u64 bp)
     volatile u32 *cs = (volatile u32 *)0x300001f00ULL;
     cs[0] = 0x50354643U; cs[1] = 0; cs[2] = cy + 1; cs[3] = 0;
     *(volatile u64 *)0x300001f10ULL = fbaddr;
+    *(volatile u32 *)0x300001f18ULL = 0;               /* console not quiet: draw the debug ring */
     if (fbpatch) *(volatile u64 *)fbpatch = fbaddr;
     puts_("framebuffer at "); put_hex(fbaddr, 12); puts_("\n");
     /* The crash kexec shuts the local APIC down (software-disable); UEFI's LocalApicTimerDxe assumes it is enabled,

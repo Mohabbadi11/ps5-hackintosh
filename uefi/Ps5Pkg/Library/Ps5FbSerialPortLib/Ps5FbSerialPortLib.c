@@ -12,7 +12,8 @@
 #include "font8x16.h"
 
 #define FB_DEFAULT 0x46a000000ULL
-#define FB_PTR     0x300001f10ULL       // stage 1 stores the framebuffer address it found here
+#define FB_PTR     0x300001f10ULL
+#define QUIET_PTR  0x300001f18ULL       // non-zero: the real GOP console owns the screen, stop drawing (log only)       // stage 1 stores the framebuffer address it found here
 #define FB_PITCH   10240U
 #define FB_W       2560U
 #define FB_H       1440U
@@ -73,6 +74,11 @@ DrawGlyph (
   )
 {
   UINT32  Line;
+
+  if (*(volatile UINT32 *)(UINTN)QUIET_PTR != 0) {
+    return;
+  }
+
   UINT32  Bit;
   UINT32  *P;
 
@@ -98,6 +104,10 @@ ClearRow (
   UINT32  Row
   )
 {
+  if (*(volatile UINT32 *)(UINTN)QUIET_PTR != 0) {
+    return;
+  }
+
   //
   // The screen is a ring of text rows: when the bottom is reached output restarts at the top, wiping one row at a
   // time, so the most recent lines (and the ones just before them) always stay readable.

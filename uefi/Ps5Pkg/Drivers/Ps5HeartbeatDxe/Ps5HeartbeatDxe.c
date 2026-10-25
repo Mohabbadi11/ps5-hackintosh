@@ -10,6 +10,7 @@
 
 #define FB_DEFAULT  0x46a000000ULL
 #define FB_PTR      0x300001f10ULL
+#define QUIET_PTR   0x300001f18ULL
 #define FB_PITCH    10240U
 #define COLS        320U
 #define STATUS_ROW  2U
@@ -60,6 +61,9 @@ OnTimer (
   }
 
   mTicks++;
+  if (*(volatile UINT32 *)(UINTN)QUIET_PTR != 0) {
+    return;
+  }
   Line[0] = 'H'; Line[1] = 'B'; Line[2] = '=';
   for (I = 0; I < 6; I++) {
     Line[3 + I] = Hex[(mTicks >> ((5 - I) * 4)) & 0xF];

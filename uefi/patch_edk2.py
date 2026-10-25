@@ -202,7 +202,7 @@ Ps5DumpLog (
     text = text.replace(old_wait, "PlatformBootManagerWaitCallback (\n  UINT16  TimeoutRemain\n  )\n{\n  Ps5DumpLog ();\n  return;\n}")
     old_tail = '      L"    ENTER           to boot directly.\\n"\n      L"\\n"\n      );\n  }\n}\n'
     assert old_tail in text, "AfterConsole tail"
-    text = text.replace(old_tail, old_tail[:-2] + "\n  Ps5DumpLog ();\n}\n")
+    text = text.replace(old_tail, old_tail[:-2] + "\n  *(volatile UINT32 *)(UINTN)0x300001f18ULL = 1;   // PS5: the GOP console owns the screen now\n  Ps5DumpLog ();\n}\n")
     open(path, "w").write(text)
     inf = "UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf"
     t = open(inf).read()
