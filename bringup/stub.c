@@ -180,21 +180,36 @@ static void quiesce_interrupts(volatile u32 *lapic)
     __asm__ volatile("cli");
 }
 
-/* bus-master off for everything that is not a bridge or the display (MSI writes are bus-master writes) */
+/* Silence message-signalled interrupts at the source: clear MSI enable / MSI-X enable in the capability lists of every
+ * non-bridge function. (Clearing bus-master enable was tried first and hung the console, probably on one of the
+ * proprietary Sony functions, so this only touches the interrupt capabilities.) */
+static void pci_wr32(u32 bus, u32 dev, u32 fn, u32 off, u32 v)
+{
+    outl(0xCF8, 0x80000000u | (bus << 16) | (dev << 11) | (fn << 8) | (off & 0xFC));
+    outl(0xCFC, v);
+}
+
 static void quiesce_pci(void)
 {
     static const u32 buses[3] = { 0x00, 0x20, 0x40 };
     for (int bi = 0; bi < 3; bi++)
         for (u32 d = 0; d < 32; d++)
             for (u32 f = 0; f < 8; f++) {
-                u32 id = pci_cfg(buses[bi], d, f, 0);
+                u32 b = buses[bi];
+                u32 id = pci_cfg(b, d, f, 0);
                 if ((id & 0xFFFF) == 0xFFFF) { if (f == 0) break; continue; }
-                u32 cls = pci_cfg(buses[bi], d, f, 8) >> 24;
-                if (cls == 0x06 || cls == 0x03) continue;          /* bridges, display */
-                u32 cmd = pci_cfg(buses[bi], d, f, 4) & 0xFFFF;
-                if (cmd & 4) {
-                    outl(0xCF8, 0x80000000u | (buses[bi] << 16) | (d << 11) | (f << 8) | 4);
-                    outl(0xCFC, cmd & ~4u);
+                u32 hdr = (pci_cfg(b, d, f, 0x0C) >> 16) & 0x7F;
+                if (hdr != 0) continue;                                    /* bridges: leave alone */
+                if (!(pci_cfg(b, d, f, 4) >> 20 & 1)) continue;            /* status: no capability list */
+                u32 ptr = pci_cfg(b, d, f, 0x34) & 0xFC;
+                for (int guard = 0; ptr >= 0x40 && guard < 48; guard++) {
+                    u32 w = pci_cfg(b, d, f, ptr);
+                    u32 cap = w & 0xFF;
+                    if (cap == 0x05)                                       /* MSI: control bit 0 */
+                        pci_wr32(b, d, f, ptr, w & ~0x10000u);
+                    else if (cap == 0x11)                                  /* MSI-X: control bit 15 */
+                        pci_wr32(b, d, f, ptr, w & ~0x80000000u);
+                    ptr = (w >> 8) & 0xFC;
                 }
             }
 }
@@ -275,8 +290,11 @@ static void stage5_launch(u64 bp)
     lapic[0x380 / 4] = 0;
     cx = save_cx; cy = save_cy;
     puts_("LAPIC svr before "); put_hex(lapic[0xF0 / 4], 8);
+    DP("q1: msi off...\n");
     quiesce_pci();
+    DP("q2: lapic flush...\n");
     lapic[0x320 / 4] = 0x10000;                       /* timer masked until UEFI programs it */
+    cx = 172; cy = 14;
     quiesce_interrupts(lapic);                        /* also: TPR 0, software enable (SVR 0x1FF), LINT0/1 masked */
     u32 isr7 = lapic[0x170 / 4], irr7 = lapic[0x270 / 4];
     save_cx = cx; save_cy = cy; cx = 172; cy = 16;
