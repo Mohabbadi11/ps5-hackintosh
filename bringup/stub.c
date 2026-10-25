@@ -52,7 +52,7 @@ static inline void cpuid(u32 leaf, u32 sub, u32 *a, u32 *b, u32 *c, u32 *d)
 #define FB_H      1440u
 #define LOG_BASE  (MARK_ADDR + 0x1000ULL)  /* text mirror, readable from Linux afterwards */
 
-static volatile u32 *const fb = (volatile u32 *)FB_BASE;
+static volatile u32 *fb = (volatile u32 *)FB_BASE;      /* moved by find_fb() when the buffer is elsewhere */
 static volatile u8  *const logbuf = (volatile u8 *)LOG_BASE;
 static u32 cx, cy, logn;
 static u32 fg = 0xFFFFFFFFu, bg = 0xFF101040u;
@@ -81,6 +81,20 @@ static void put_hex(u64 v, int digits)
 {
     for (int i = digits - 1; i >= 0; i--)
         put_char("0123456789abcdef"[(v >> (i * 4)) & 0xF]);
+}
+
+/* The dumb buffer's place in the carve-out depends on what ran before; look for its signature (8 ascending words
+ * 0xDEADBE00.. at pixel (0,0)) on page boundaries. Returns the physical address or 0. */
+static u64 find_fb(void)
+{
+    for (u64 a = 0x450000000ULL; a < 0x470000000ULL; a += 0x1000) {
+        volatile u32 *p = (volatile u32 *)a;
+        if (p[0] == 0xDEADBE00u && p[1] == 0xDEADBE01u && p[7] == 0xDEADBE07u) {
+            fb = p;
+            return a;
+        }
+    }
+    return 0;
 }
 
 static void clear_screen(void)
@@ -157,18 +171,24 @@ static void stage5_launch(u64 bp)
         for (;;) __asm__ volatile("pause");
     }
     u64 entry = *(volatile u64 *)(img + 8), rcx = *(volatile u64 *)(img + 16), rsp = *(volatile u64 *)(img + 24);
-    u32 count = *(volatile u32 *)(img + 32);
+    u64 fbpatch = *(volatile u64 *)(img + 32);
+    u32 count = *(volatile u32 *)(img + 40);
+    u64 fbaddr = (u64)(unsigned long)fb;
     puts_("entry "); put_hex(entry, 12); puts_("  hob list "); put_hex(rcx, 12); puts_("  rsp "); put_hex(rsp, 12);
     puts_("  segments "); put_hex(count, 2); puts_("\n");
     for (u32 i = 0; i < count; i++) {
-        volatile u64 *e = (volatile u64 *)(img + 40 + (u64)i * 24);
+        volatile u64 *e = (volatile u64 *)(img + 48 + (u64)i * 24);
         u64 dest = e[0], size = e[1], off = e[2];
         puts_("  copy "); put_hex(dest, 12); puts_(" <- "); put_hex(size, 8); puts_(" bytes\n");
         if (off == ~0ULL) zero_bytes(dest, size); else copy_bytes(dest, img + off, size);
     }
-    /* hand the cursor over to the UEFI console (Ps5FbSerialPortLib keeps its state at phys 0x300001f00) */
+    /* hand the cursor and the framebuffer address over to the UEFI console (Ps5FbSerialPortLib keeps its state at
+     * phys 0x300001f00) and patch the GOP HOB inside the copied HOB list */
     volatile u32 *cs = (volatile u32 *)0x300001f00ULL;
     cs[0] = 0x50354643U; cs[1] = 0; cs[2] = cy + 1; cs[3] = 0;
+    *(volatile u64 *)0x300001f10ULL = fbaddr;
+    if (fbpatch) *(volatile u64 *)fbpatch = fbaddr;
+    puts_("framebuffer at "); put_hex(fbaddr, 12); puts_("\n");
     puts_("\njumping to the UEFI payload...\n");
     __asm__ volatile("wbinvd" ::: "memory");
     *(volatile u64 *)(rsp - 8) = 0;                  /* fake return address, rsp ends up 8 mod 16 as after a call */
@@ -281,10 +301,9 @@ void stage1_main(u64 boot_params)
 #endif
 #if VARIANT == 4
     {
-        volatile u32 *sig = (volatile u32 *)FB_BASE;
-        m[n++] = sig[0];
-        m[n++] = sig[1];
-        if (sig[0] == 0xDEADBE00u && sig[1] == 0xDEADBE01u) {
+        u64 fbaddr = find_fb();
+        m[n++] = fbaddr;
+        if (fbaddr) {
             stage4_report(boot_params);
             u64 start = rdtsc();
             while (rdtsc() - start < (u64)HOLD_SECONDS * 1596300000ULL)
@@ -296,8 +315,9 @@ void stage1_main(u64 boot_params)
 #endif
 #if VARIANT == 5
     {
-        volatile u32 *sig = (volatile u32 *)FB_BASE;
-        if (sig[0] == 0xDEADBE00u && sig[1] == 0xDEADBE01u)
+        u64 fbaddr = find_fb();
+        m[n++] = fbaddr;
+        if (fbaddr)
             stage5_launch(boot_params);
         m[n++] = 0xBAD0F8;                           /* no linear framebuffer: go back to Linux */
         m[1] = n;

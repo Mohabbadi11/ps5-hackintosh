@@ -11,7 +11,8 @@
 #include <Library/SerialPortLib.h>
 #include "font8x16.h"
 
-#define FB_BASE    0x46a000000ULL
+#define FB_DEFAULT 0x46a000000ULL
+#define FB_PTR     0x300001f10ULL       // stage 1 stores the framebuffer address it found here
 #define FB_PITCH   10240U
 #define FB_W       2560U
 #define FB_H       1440U
@@ -52,6 +53,17 @@ State (
 }
 
 STATIC
+UINT64
+FbBase (
+  VOID
+  )
+{
+  UINT64  V = *(volatile UINT64 *)(UINTN)FB_PTR;
+
+  return (V != 0) ? V : FB_DEFAULT;
+}
+
+STATIC
 VOID
 DrawGlyph (
   UINT32  Col,
@@ -65,7 +77,7 @@ DrawGlyph (
 
   for (Line = 0; Line < 16; Line++) {
     UINT8  Bits = font8x16[Ch][Line];
-    P = (UINT32 *)(UINTN)(FB_BASE + (UINT64)(Row * 16 + Line) * FB_PITCH + (UINT64)Col * 32);
+    P = (UINT32 *)(UINTN)(FbBase () + (UINT64)(Row * 16 + Line) * FB_PITCH + (UINT64)Col * 32);
     for (Bit = 0; Bit < 8; Bit++) {
       P[Bit] = (Bits & (0x80 >> Bit)) ? 0xFFFFFFFFU : 0xFF101040U;
     }
@@ -75,7 +87,7 @@ DrawGlyph (
   // The scanout engine reads DRAM, not the CPU caches: push the 16 glyph lines (32 bytes each) out.
   //
   for (Line = 0; Line < 16; Line++) {
-    AsmFlushCacheLine ((VOID *)(UINTN)(FB_BASE + (UINT64)(Row * 16 + Line) * FB_PITCH + (UINT64)Col * 32));
+    AsmFlushCacheLine ((VOID *)(UINTN)(FbBase () + (UINT64)(Row * 16 + Line) * FB_PITCH + (UINT64)Col * 32));
   }
 }
 
@@ -93,7 +105,7 @@ Scroll (
   UINT32  *P;
 
   for (Y = 0; Y < FB_H; Y++) {
-    P = (UINT32 *)(UINTN)(FB_BASE + (UINT64)Y * FB_PITCH);
+    P = (UINT32 *)(UINTN)(FbBase () + (UINT64)Y * FB_PITCH);
     for (X = 0; X < FB_W; X++) {
       P[X] = 0xFF101040U;
     }

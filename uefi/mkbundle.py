@@ -9,6 +9,7 @@ Bundle layout (little endian):
     u64    entry          physical address to jump to
     u64    rcx            first argument (HOB list address)
     u64    rsp            initial stack pointer
+    u64    fbpatch        physical address of the GOP HOB's FrameBufferBase (stage 1 patches the found framebuffer in)
     u32    count, u32 pad
     count * { u64 dest, u64 size, u64 offset }   offset == 0xFFFF_FFFF_FFFF_FFFF means "zero-fill"
     ...    data
@@ -114,10 +115,13 @@ def build_hobs(fvs):
     board = struct.pack("<B2xB", 1, 0) + struct.pack("<QQQQQQQ", 0, 0, 0, 0, 0, ECAM_BASE, ECAM_SIZE)
     body += guid_hob(GUID_ACPI_BOARD, board)
 
+    global FB_PATCH_OFFSET
+    FB_PATCH_OFFSET = None
     gfx = struct.pack("<QI", FB_BASE, FB_PITCH * FB_H)
     gfx += struct.pack("<IIII", 0, FB_W, FB_H, 1)                               # version, w, h, PixelBlueGreenRedReserved8Bit
     gfx += struct.pack("<IIII", 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000) # masks (unused for BGRX)
     gfx += struct.pack("<I", FB_PITCH // 4)
+    FB_PATCH_OFFSET = 56 + len(body) + 8 + 16             # PHIT(56) + HOBs so far + this HOB's header(8) + GUID(16)
     body += guid_hob(GUID_GFX_INFO, gfx)
     body += guid_hob(GUID_GFX_DEV, struct.pack("<HHHHBB", 0x1002, 0x13fc, 0xFFFF, 0xFFFF, 0xFF, 0xFF))
 
@@ -204,7 +208,8 @@ def main():
     print(f"HOB list: {len(hobs):#x} bytes at {HOB_BASE:#x}")
 
     segments = [(BASE, bytes(image))] + fvdata + [(HOB_BASE, hobs)]
-    hdr = struct.pack("<8sQQQII", b"PS5BNDL1", BASE + entry, HOB_BASE, STACK_TOP - 0x40, len(segments), 0)
+    hdr = struct.pack("<8sQQQQII", b"PS5BNDL1", BASE + entry, HOB_BASE, STACK_TOP - 0x40,
+                      HOB_BASE + FB_PATCH_OFFSET, len(segments), 0)
     table_len = len(segments) * 24
     off = len(hdr) + table_len
     table, data = b"", b""
