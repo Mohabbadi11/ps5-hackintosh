@@ -1,0 +1,28 @@
+## @file
+#  Visible heartbeat: a periodic timer event that redraws a counter and the TSC seconds in the top-right corner of the
+#  PS5 framebuffer. If the numbers keep moving on screen, interrupts and the UEFI timer work and the CPU is alive.
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Ps5HeartbeatDxe
+  FILE_GUID                      = 94a3d6c1-5e2b-4f07-8c19-7b0e2d4f6a35
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = HeartbeatEntry
+
+[Sources]
+  Ps5HeartbeatDxe.c
+  font8x16.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseLib
+  DebugLib
+
+[Depex]
+  gEfiTimerArchProtocolGuid
