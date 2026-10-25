@@ -28,5 +28,5 @@ open("UefiPayloadPkg/Ps5Payload.dsc", "w").write(s)
 PY
     python3 UefiPayloadPkg/UniversalPayloadBuild.py -t CLANGDWARF -c UefiPayloadPkg/Ps5Payload.dsc \
         -D TIMER_SUPPORT=LAPIC -D SERIAL_DRIVER_ENABLE=FALSE -D PS2_KEYBOARD_ENABLE=FALSE -D PS2_MOUSE_ENABLE=FALSE \
-        -D SD_ENABLE=FALSE -D ATA_ENABLE=FALSE -D NETWORK_DRIVER_ENABLE=FALSE "${ARGS[@]}"
+        -D SD_ENABLE=FALSE -D ATA_ENABLE=FALSE -D NETWORK_DRIVER_ENABLE=FALSE -D MAX_LOGICAL_PROCESSORS=1 "${ARGS[@]}"
 ' bash "$@"
