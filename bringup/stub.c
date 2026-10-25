@@ -44,7 +44,7 @@ static inline void cpuid(u32 leaf, u32 sub, u32 *a, u32 *b, u32 *c, u32 *d)
 }
 
 
-#if VARIANT == 4
+#if VARIANT == 4 || VARIANT == 5
 #include "font8x16.h"
 #define FB_BASE   0x46a000000ULL           /* VRAM carve-out is system RAM: VRAM offset N == phys 0x450000000 + N */
 #define FB_PITCH  10240u
@@ -59,7 +59,9 @@ static u32 fg = 0xFFFFFFFFu, bg = 0xFF101040u;
 
 static void put_char(u8 c)
 {
+#if VARIANT == 4
     if (logn < 0xE000) logbuf[logn++] = c;
+#endif
     if (c == '\n') { cx = 0; cy++; return; }
     if (cx >= FB_W / 8) { cx = 0; cy++; }
     if (cy >= FB_H / 16) return;
@@ -125,6 +127,54 @@ static void stage4_report(u64 bp)
                 puts_("  "); put_hex(id & 0xFFFF, 4); put_char(':'); put_hex(id >> 16, 4);
                 puts_("  class "); put_hex(cls, 6); puts_("\n");
             }
+}
+#endif
+
+#if VARIANT == 5
+/* Stage 1 as a loader for the EDK2 Universal Payload: the kexec initrd is a "PS5BNDL1" bundle (uefi/mkbundle.py) with
+ * segments to copy to fixed physical addresses, the entry point, the HOB list address (rcx) and a stack. */
+static void copy_bytes(u64 dst, u64 src, u64 n)
+{
+    __asm__ volatile("cld; rep movsb" : "+D"(dst), "+S"(src), "+c"(n) :: "memory");
+}
+
+static void zero_bytes(u64 dst, u64 n)
+{
+    __asm__ volatile("cld; rep stosb" : "+D"(dst), "+c"(n) : "a"(0) : "memory");
+}
+
+static void stage5_launch(u64 bp)
+{
+    u64 img = (u64)*(volatile u32 *)(bp + 0x218) | ((u64)*(volatile u32 *)(bp + 0xC0) << 32);
+    u64 isz = (u64)*(volatile u32 *)(bp + 0x21C) | ((u64)*(volatile u32 *)(bp + 0xC4) << 32);
+    clear_screen();
+    puts_("PS5 stage 1 - V5 loader for the UEFI payload\n\n");
+    puts_("boot_params "); put_hex(bp, 16); puts_("\n");
+    puts_("bundle (initrd) at "); put_hex(img, 12); puts_(" size "); put_hex(isz, 8); puts_("\n");
+    u64 magic = *(volatile u64 *)img;
+    if (magic != 0x314C444E42355350ULL) {          /* "PS5BNDL1" */
+        puts_("bad bundle magic "); put_hex(magic, 16); puts_("\nHOLD\n");
+        for (;;) __asm__ volatile("pause");
+    }
+    u64 entry = *(volatile u64 *)(img + 8), rcx = *(volatile u64 *)(img + 16), rsp = *(volatile u64 *)(img + 24);
+    u32 count = *(volatile u32 *)(img + 32);
+    puts_("entry "); put_hex(entry, 12); puts_("  hob list "); put_hex(rcx, 12); puts_("  rsp "); put_hex(rsp, 12);
+    puts_("  segments "); put_hex(count, 2); puts_("\n");
+    for (u32 i = 0; i < count; i++) {
+        volatile u64 *e = (volatile u64 *)(img + 40 + (u64)i * 24);
+        u64 dest = e[0], size = e[1], off = e[2];
+        puts_("  copy "); put_hex(dest, 12); puts_(" <- "); put_hex(size, 8); puts_(" bytes\n");
+        if (off == ~0ULL) zero_bytes(dest, size); else copy_bytes(dest, img + off, size);
+    }
+    /* hand the cursor over to the UEFI console (Ps5FbSerialPortLib keeps its state at phys 0x300001f00) */
+    volatile u32 *cs = (volatile u32 *)0x300001f00ULL;
+    cs[0] = 0x50354643U; cs[1] = 0; cs[2] = cy + 1; cs[3] = 0;
+    puts_("\njumping to the UEFI payload...\n");
+    __asm__ volatile("wbinvd" ::: "memory");
+    *(volatile u64 *)(rsp - 8) = 0;                  /* fake return address, rsp ends up 8 mod 16 as after a call */
+    __asm__ volatile("mov %0, %%rcx\n\tmov %1, %%rsp\n\txor %%ebp, %%ebp\n\tjmp *%2"
+                     :: "r"(rcx), "r"(rsp - 8), "r"(entry) : "memory");
+    __builtin_unreachable();
 }
 #endif
 
@@ -241,6 +291,15 @@ void stage1_main(u64 boot_params)
                 __asm__ volatile("pause");
         }
         m[n++] = logn;
+        m[1] = n;
+    }
+#endif
+#if VARIANT == 5
+    {
+        volatile u32 *sig = (volatile u32 *)FB_BASE;
+        if (sig[0] == 0xDEADBE00u && sig[1] == 0xDEADBE01u)
+            stage5_launch(boot_params);
+        m[n++] = 0xBAD0F8;                           /* no linear framebuffer: go back to Linux */
         m[1] = n;
     }
 #endif
