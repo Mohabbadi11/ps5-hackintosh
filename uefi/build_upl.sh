@@ -26,6 +26,7 @@ s = re.sub(r"(?m)^(\s*)PlatformHookLib\|UefiPayloadPkg/Library/PlatformHookLib/P
            r"\1PlatformHookLib|MdeModulePkg/Library/BasePlatformHookLibNull/BasePlatformHookLibNull.inf", s)
 s = re.sub(r"(?m)^(\s*)ResetSystemLib\|UefiPayloadPkg/Library/ResetSystemLib/ResetSystemLib.inf",
            r"\1ResetSystemLib|Ps5Pkg/Library/Ps5ResetSystemLib/Ps5ResetSystemLib.inf", s)
+s = re.sub(r"(?m)^(\s*)TimerLib\|.*$", r"\1TimerLib|Ps5Pkg/Library/Ps5TscTimerLib/Ps5TscTimerLib.inf", s)
 open("UefiPayloadPkg/Ps5Payload.dsc", "w").write(s)
 PY
     python3 UefiPayloadPkg/UniversalPayloadBuild.py -t CLANGDWARF -c UefiPayloadPkg/Ps5Payload.dsc \

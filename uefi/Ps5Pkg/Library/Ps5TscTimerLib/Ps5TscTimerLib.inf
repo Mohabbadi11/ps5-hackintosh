@@ -1,0 +1,21 @@
+## @file
+#  TimerLib on the TSC with a fixed frequency: Zen 2 has no CPUID leaf 0x15 and the PS5 has no PIT/HPET/ACPI PM timer.
+#  1596.3 MHz is what Linux measured on this console ("tsc: Detected 1596.300 MHz processor").
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Ps5TscTimerLib
+  FILE_GUID                      = 6a1d9e34-2b7c-4a58-9f01-d3c85b6e7a12
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = TimerLib
+
+[Sources]
+  Ps5TscTimerLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseLib
