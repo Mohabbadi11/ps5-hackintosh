@@ -18,6 +18,7 @@ docker run --rm -v "$EDK2:/work/edk2" -v "$ROOT/uefi:/work/ps5:ro" -w /work/edk2
     ARGS=("$@"); set --
     export PACKAGES_PATH=/work/edk2:/work/ps5
     source edksetup.sh >/dev/null
+    python3 /work/ps5/patch_edk2.py
     python3 - <<PY
 import re
 s = open("UefiPayloadPkg/UefiPayloadPkg.dsc").read()
