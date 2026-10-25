@@ -1,0 +1,9 @@
+## @file
+#  PS5 platform support: debug console drawn straight into the display carve-out.
+##
+
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = Ps5Pkg
+  PACKAGE_GUID                   = 5d1c2e0a-7b6c-4c1a-9a53-4f7b6d2a15c0
+  PACKAGE_VERSION                = 0.1

@@ -1,0 +1,22 @@
+## @file
+#  SerialPortLib that prints into the PS5 linear framebuffer (VRAM carve-out in system RAM) and mirrors the text into a
+#  memory log, so UEFI debug output is visible on screen without any UART.
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Ps5FbSerialPortLib
+  FILE_GUID                      = 8b3a4c2e-91f5-4d6a-b8e3-2c0f9d17a6e4
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = SerialPortLib
+
+[Sources]
+  Ps5FbSerialPortLib.c
+  font8x16.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseLib
