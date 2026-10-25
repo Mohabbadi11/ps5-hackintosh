@@ -24,6 +24,8 @@ s = open("UefiPayloadPkg/UefiPayloadPkg.dsc").read()
 s = re.sub(r"(?m)^(\s*)SerialPortLib\|.*$", r"\1SerialPortLib|Ps5Pkg/Library/Ps5FbSerialPortLib/Ps5FbSerialPortLib.inf", s)
 s = re.sub(r"(?m)^(\s*)PlatformHookLib\|UefiPayloadPkg/Library/PlatformHookLib/PlatformHookLib.inf",
            r"\1PlatformHookLib|MdeModulePkg/Library/BasePlatformHookLibNull/BasePlatformHookLibNull.inf", s)
+s = re.sub(r"(?m)^(\s*)ResetSystemLib\|UefiPayloadPkg/Library/ResetSystemLib/ResetSystemLib.inf",
+           r"\1ResetSystemLib|Ps5Pkg/Library/Ps5ResetSystemLib/Ps5ResetSystemLib.inf", s)
 open("UefiPayloadPkg/Ps5Payload.dsc", "w").write(s)
 PY
     python3 UefiPayloadPkg/UniversalPayloadBuild.py -t CLANGDWARF -c UefiPayloadPkg/Ps5Payload.dsc \

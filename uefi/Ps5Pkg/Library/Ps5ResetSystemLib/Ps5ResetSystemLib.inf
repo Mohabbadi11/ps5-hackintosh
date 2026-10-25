@@ -1,0 +1,23 @@
+## @file
+#  ResetSystemLib for the PS5: no usable ACPI reset/PM registers, so every reset type is a triple fault, which the
+#  console turns into a full reset (verified: a crashed stage reboots the console into the PlayStation software).
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Ps5ResetSystemLib
+  FILE_GUID                      = 3c7f5b1e-0d4a-4f3b-8e6d-91a2b4c6d8e0
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = ResetSystemLib
+
+[Sources]
+  Ps5ResetSystemLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  DebugLib
