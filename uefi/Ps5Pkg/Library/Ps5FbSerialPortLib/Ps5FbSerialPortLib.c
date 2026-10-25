@@ -20,6 +20,7 @@
 #define LOG_SIZE   0x40000U
 
 #define COLS       (FB_W / 8)
+#define RING_COLS  168U                 // the log ring uses the left part; the right part is kept for diagnostics
 #define ROWS       (FB_H / 16)
 
 //
@@ -107,11 +108,11 @@ ClearRow (
 
   for (Y = Row * 16; Y < Row * 16 + 16; Y++) {
     P = (UINT32 *)(UINTN)(FbBase () + (UINT64)Y * FB_PITCH);
-    for (X = 0; X < FB_W; X++) {
+    for (X = 0; X < RING_COLS * 8; X++) {
       P[X] = 0xFF101040U;
     }
 
-    for (X = 0; X < FB_W * 4; X += 64) {
+    for (X = 0; X < RING_COLS * 8 * 4; X += 64) {
       AsmFlushCacheLine ((VOID *)((UINTN)P + X));
     }
   }
@@ -194,7 +195,7 @@ SerialPortWrite (
       continue;
     }
 
-    if (S->Col >= COLS) {
+    if (S->Col >= RING_COLS) {
       S->Col = 0;
       S->Row = (S->Row + 1) % ROWS;
       ClearRow (S->Row);

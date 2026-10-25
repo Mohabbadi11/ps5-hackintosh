@@ -192,6 +192,37 @@ static void stage5_launch(u64 bp)
     /* The crash kexec shuts the local APIC down (software-disable); UEFI's LocalApicTimerDxe assumes it is enabled,
      * otherwise BdsWait never sees a timer tick and the boot manager sleeps forever. */
     volatile u32 *lapic = (volatile u32 *)0xFEE00000ULL;
+    /* diagnostics block on the right of the screen (the UEFI log ring leaves that part alone) */
+    u32 save_cx = cx, save_cy = cy;
+    cx = 172; cy = 4;
+    #define DP(str) do { for (const char *q_ = (str); *q_; q_++) { if (*q_ == '\n') { cx = 172; cy++; } else put_char((u8)*q_); } } while (0)
+    DP("LAPIC at 0xFEE00000\n");
+    DP(" id    "); put_hex(lapic[0x20 / 4] >> 24, 2); DP("  ver "); put_hex(lapic[0x30 / 4], 8); DP("\n");
+    DP(" tpr   "); put_hex(lapic[0x80 / 4], 8); DP("  ppr "); put_hex(lapic[0xA0 / 4], 8); DP("\n");
+    DP(" svr   "); put_hex(lapic[0xF0 / 4], 8); DP("  esr "); put_hex(lapic[0x280 / 4], 8); DP("\n");
+    DP(" isr   ");
+    for (int i = 0; i < 8; i++) { put_hex(lapic[(0x100 + i * 0x10) / 4], 8); put_char(' '); }
+    DP("\n irr   ");
+    for (int i = 0; i < 8; i++) { put_hex(lapic[(0x200 + i * 0x10) / 4], 8); put_char(' '); }
+    DP("\n lvt   timer "); put_hex(lapic[0x320 / 4], 8); DP(" therm "); put_hex(lapic[0x330 / 4], 8);
+    DP(" perf "); put_hex(lapic[0x340 / 4], 8); DP("\n");
+    DP("       lint0 "); put_hex(lapic[0x350 / 4], 8); DP(" lint1 "); put_hex(lapic[0x360 / 4], 8);
+    DP(" err "); put_hex(lapic[0x370 / 4], 8); DP("\n");
+    DP(" tmr   div "); put_hex(lapic[0x3E0 / 4], 8); DP(" init "); put_hex(lapic[0x380 / 4], 8);
+    DP(" cur "); put_hex(lapic[0x390 / 4], 8); DP("\n");
+    /* does the timer count? one-shot, masked, divide by 1, start at 0xFFFFFFFF and look again 1M TSC ticks later */
+    lapic[0x3E0 / 4] = 0xB;
+    lapic[0x320 / 4] = 0x10020;
+    lapic[0x380 / 4] = 0xFFFFFFFFu;
+    u32 c0 = lapic[0x390 / 4];
+    u64 t0_ = rdtsc();
+    while (rdtsc() - t0_ < 1000000) __asm__ volatile("pause");
+    u32 c1 = lapic[0x390 / 4];
+    DP(" timer test: cur0 "); put_hex(c0, 8); DP(" cur1 "); put_hex(c1, 8); DP(" delta "); put_hex(c0 - c1, 8);
+    DP("  (per 1M TSC ticks)\n");
+    lapic[0x380 / 4] = 0;
+    #undef DP
+    cx = save_cx; cy = save_cy;
     puts_("LAPIC svr before "); put_hex(lapic[0xF0 / 4], 8);
     lapic[0x80 / 4] = 0;                              /* task priority: accept everything */
     lapic[0xF0 / 4] = 0x1FF;                          /* software enable, spurious vector 0xFF */
