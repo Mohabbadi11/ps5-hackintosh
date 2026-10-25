@@ -119,3 +119,93 @@ if "PS5 PATCH QUIET" not in text:
     text = pattern.sub("    // PS5 PATCH QUIET: banner removed\n", text)
     open(path, "w").write(text)
     print("patched QUIET", path)
+
+# ---- PlatformBootManagerLib: dump the framebuffer console log to \ps5-uefi.log on the boot USB -----------------------------
+# The console log lives in RAM (0x300002000, length at 0x300001f0c) which does not survive the jailbreak cycle. BDS calls the
+# platform hooks at TPL_APPLICATION, where FAT writes are safe: write the log after the console is up and on every
+# BdsWait tick, into the ESP that contains EFI\OC\OpenCore.efi, so Linux can read it afterwards.
+path = "UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c"
+text = open(path).read()
+if "PS5 PATCH LOG" not in text:
+    helper = r'''
+#include <Protocol/SimpleFileSystem.h>
+#include <Guid/FileInfo.h>
+
+// PS5 PATCH LOG
+STATIC
+VOID
+Ps5DumpLog (
+  VOID
+  )
+{
+  UINT32                           Len;
+  EFI_HANDLE                       *Handles;
+  UINTN                            Count;
+  UINTN                            I;
+  EFI_STATUS                       Status;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Fs;
+  EFI_FILE_PROTOCOL                *Root;
+  EFI_FILE_PROTOCOL                *File;
+  UINTN                            Size;
+
+  Len = *(volatile UINT32 *)(UINTN)0x300001f0cULL;
+  if ((Len == 0) || (Len > 0x40000)) {
+    return;
+  }
+
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &Count, &Handles);
+  if (EFI_ERROR (Status)) {
+    return;
+  }
+
+  for (I = 0; I < Count; I++) {
+    if (EFI_ERROR (gBS->HandleProtocol (Handles[I], &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs))) {
+      continue;
+    }
+
+    if (EFI_ERROR (Fs->OpenVolume (Fs, &Root))) {
+      continue;
+    }
+
+    if (!EFI_ERROR (Root->Open (Root, &File, L"\\EFI\\OC\\OpenCore.efi", EFI_FILE_MODE_READ, 0))) {
+      File->Close (File);
+      if (!EFI_ERROR (Root->Open (Root, &File, L"\\ps5-uefi.log", EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0))) {
+        File->Delete (File);
+      }
+
+      if (!EFI_ERROR (Root->Open (Root, &File, L"\\ps5-uefi.log", EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0))) {
+        Size = Len;
+        File->Write (File, &Size, (VOID *)(UINTN)0x300002000ULL);
+        File->Flush (File);
+        File->Close (File);
+      }
+
+      Root->Close (Root);
+      break;
+    }
+
+    Root->Close (Root);
+  }
+
+  gBS->FreePool (Handles);
+}
+
+'''
+    anchor = "VOID\nEFIAPI\nPlatformBootManagerAfterConsole ("
+    assert text.count(anchor) == 1
+    # keep the doc comment above AfterConsole attached to it: insert the helper before that comment block
+    idx = text.rindex("/**", 0, text.index(anchor))
+    text = text[:idx] + helper.lstrip("\n") + "\n" + text[idx:]
+    old_wait = "PlatformBootManagerWaitCallback (\n  UINT16  TimeoutRemain\n  )\n{\n  return;\n}"
+    assert old_wait in text
+    text = text.replace(old_wait, "PlatformBootManagerWaitCallback (\n  UINT16  TimeoutRemain\n  )\n{\n  Ps5DumpLog ();\n  return;\n}")
+    old_tail = '      L"    ENTER           to boot directly.\\n"\n      L"\\n"\n      );\n  }\n}\n'
+    assert old_tail in text, "AfterConsole tail"
+    text = text.replace(old_tail, old_tail[:-2] + "\n  Ps5DumpLog ();\n}\n")
+    open(path, "w").write(text)
+    inf = "UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf"
+    t = open(inf).read()
+    t = t.replace("  gEfiPciRootBridgeIoProtocolGuid\n", "  gEfiPciRootBridgeIoProtocolGuid\n  gEfiSimpleFileSystemProtocolGuid\n", 1)
+    t = t.replace("[Guids]\n  gEfiEndOfDxeEventGroupGuid", "[Guids]\n  gEfiFileInfoGuid\n  gEfiEndOfDxeEventGroupGuid", 1)
+    open(inf, "w").write(t)
+    print("patched LOG", path)
