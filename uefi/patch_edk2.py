@@ -106,3 +106,16 @@ if "PS5 PATCH PCI" not in text:
     text = text.replace(old1, new1).replace(old2, new2).replace(old3, new3).replace(old4, new4)
     open(path, "w").write(text)
     print("patched PCI/debug", path)
+
+# ---- GraphicsOutputDxe: drop the per-controller 'GraphicsDeviceInfo HOB' banner ------------------------------------------
+# It is printed for every PCI controller on every connect pass and floods the framebuffer log ring, hiding the lines that
+# matter (the GOP installation statuses).
+import re
+path = "UefiPayloadPkg/GraphicsOutputDxe/GraphicsOutput.c"
+text = open(path).read()
+if "PS5 PATCH QUIET" not in text:
+    pattern = re.compile(r'    DEBUG \(\(\n      DEBUG_INFO,\n      "\[%a\]: GraphicsDeviceInfo HOB:\\n".*?\n      \)\);\n', re.S)
+    assert len(pattern.findall(text)) == 1, "GraphicsDeviceInfo banner not found once"
+    text = pattern.sub("    // PS5 PATCH QUIET: banner removed\n", text)
+    open(path, "w").write(text)
+    print("patched QUIET", path)
