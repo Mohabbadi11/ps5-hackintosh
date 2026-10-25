@@ -33,6 +33,7 @@ if "PS5 PATCH" not in text:
     new = ("      if (Index == MAX_PCI_BAR) {\n"
            "        // PS5 PATCH: framebuffer is not inside a BAR, trust the HOB\n"
            "        FrameBufferBase = GraphicsInfo->FrameBufferBase;\n"
+           "        Status          = EFI_SUCCESS;  // the BAR loop left the error of its last GetBarAttributes() call here\n"
            "        DEBUG ((DEBUG_INFO, \"[%a]: framebuffer outside the BARs, using HOB base %lx\\n\", gEfiCallerBaseName, FrameBufferBase));\n"
            "      } else {")
     assert old in text, "unexpected GraphicsOutput.c contents"
