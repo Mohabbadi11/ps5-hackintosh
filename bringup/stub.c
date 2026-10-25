@@ -1,0 +1,250 @@
+/* Stage 1 of the PS5 bring-up chain: runs in place of the Linux 64-bit entry, records what the CPU/boot
+ * environment looks like into a fixed physical page (outside the dump kernel's RAM), then hands over to
+ * the real kernel that follows this stub in the image. */
+typedef unsigned long long u64;
+typedef unsigned int u32;
+typedef unsigned short u16;
+typedef unsigned char u8;
+
+#define MARK_ADDR  0x300000000ULL          /* 12 GiB: RAM of the crashed kernel, not owned by us */
+#define NMARK      64
+
+static u64 pml4[512] __attribute__((aligned(4096)));
+static u64 pdpt[512] __attribute__((aligned(4096)));
+
+static void build_page_tables(void)
+{
+    for (u64 g = 0; g < 64; g++) {
+        u64 flags = 0x83;                            /* P | RW | PS (1 GiB) */
+        if (g == 3 || g == 17)
+            flags |= 0x18;                           /* PCD | PWT: 0xC0000000..0xFFFFFFFF and the carve-out gig */
+        pdpt[g] = (g << 30) | flags;
+    }
+    pml4[0] = (u64)(unsigned long)&pdpt[0] | 0x3;
+    __asm__ volatile("mov %0, %%cr3" :: "r"((u64)(unsigned long)&pml4[0]) : "memory");
+}
+
+static inline u64 rdmsr(u32 msr)
+{
+    u32 lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((u64)hi << 32) | lo;
+}
+
+static inline u64 rdtsc(void)
+{
+    u32 lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((u64)hi << 32) | lo;
+}
+
+static inline void cpuid(u32 leaf, u32 sub, u32 *a, u32 *b, u32 *c, u32 *d)
+{
+    __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(sub));
+}
+
+
+#if VARIANT == 4
+#include "font8x16.h"
+#define FB_BASE   0x46a000000ULL           /* VRAM carve-out is system RAM: VRAM offset N == phys 0x450000000 + N */
+#define FB_PITCH  10240u
+#define FB_W      2560u
+#define FB_H      1440u
+#define LOG_BASE  (MARK_ADDR + 0x1000ULL)  /* text mirror, readable from Linux afterwards */
+
+static volatile u32 *const fb = (volatile u32 *)FB_BASE;
+static volatile u8  *const logbuf = (volatile u8 *)LOG_BASE;
+static u32 cx, cy, logn;
+static u32 fg = 0xFFFFFFFFu, bg = 0xFF101040u;
+
+static void put_char(u8 c)
+{
+    if (logn < 0xE000) logbuf[logn++] = c;
+    if (c == '\n') { cx = 0; cy++; return; }
+    if (cx >= FB_W / 8) { cx = 0; cy++; }
+    if (cy >= FB_H / 16) return;
+    const u8 *g = font8x16[c];
+    for (u32 row = 0; row < 16; row++) {
+        u8 bits = g[row];
+        volatile u32 *p = fb + (u64)(cy * 16 + row) * (FB_PITCH / 4) + cx * 8;
+        for (u32 col = 0; col < 8; col++)
+            p[col] = (bits & (0x80 >> col)) ? fg : bg;
+    }
+    cx++;
+}
+
+static void puts_(const char *s) { while (*s) put_char((u8)*s++); }
+
+static void put_hex(u64 v, int digits)
+{
+    for (int i = digits - 1; i >= 0; i--)
+        put_char("0123456789abcdef"[(v >> (i * 4)) & 0xF]);
+}
+
+static void clear_screen(void)
+{
+    for (u64 y = 0; y < FB_H; y++) {
+        volatile u32 *p = fb + y * (FB_PITCH / 4);
+        for (u32 x = 0; x < FB_W; x++) p[x] = bg;
+    }
+    cx = cy = 0;
+}
+
+static inline void outl(u16 port, u32 v) { __asm__ volatile("outl %0, %1" :: "a"(v), "Nd"(port)); }
+static inline u32 inl(u16 port) { u32 v; __asm__ volatile("inl %1, %0" : "=a"(v) : "Nd"(port)); return v; }
+static u32 pci_cfg(u32 bus, u32 dev, u32 fn, u32 off)
+{
+    outl(0xCF8, 0x80000000u | (bus << 16) | (dev << 11) | (fn << 8) | (off & 0xFC));
+    return inl(0xCFC);
+}
+
+static void stage4_report(u64 bp)
+{
+    clear_screen();
+    puts_("PS5 stage 1 - V4 text console (direct framebuffer, phys 0x46a000000)\n\n");
+    puts_("boot_params "); put_hex(bp, 16); puts_("\n");
+    u8 n820 = *(volatile u8 *)(bp + 0x1E8);
+    puts_("e820 entries: "); put_hex(n820, 2); puts_("\n");
+    for (u32 i = 0; i < n820 && i < 64; i++) {
+        volatile u8 *e = (volatile u8 *)(bp + 0x2D0 + i * 20);
+        u64 a = *(volatile u64 *)e, sz = *(volatile u64 *)(e + 8);
+        u32 t = *(volatile u32 *)(e + 16);
+        puts_("  "); put_hex(a, 12); puts_(" - "); put_hex(a + sz - 1, 12); puts_("  type "); put_hex(t, 1); puts_("\n");
+    }
+    puts_("acpi_rsdp_addr "); put_hex(*(volatile u64 *)(bp + 0x70), 16); puts_("\n");
+    puts_("cmd_line_ptr   "); put_hex(*(volatile u32 *)(bp + 0x228), 8); puts_("\n\n");
+    puts_("PCI devices (config mechanism 1, buses 00 20 40):\n");
+    static const u32 buses[3] = { 0x00, 0x20, 0x40 };
+    for (int bi = 0; bi < 3; bi++)
+        for (u32 d = 0; d < 32; d++)
+            for (u32 f = 0; f < 8; f++) {
+                u32 id = pci_cfg(buses[bi], d, f, 0);
+                if ((id & 0xFFFF) == 0xFFFF) { if (f == 0) break; continue; }
+                u32 cls = pci_cfg(buses[bi], d, f, 8) >> 8;
+                puts_("  "); put_hex(buses[bi], 2); put_char(':'); put_hex(d, 2); put_char('.'); put_hex(f, 1);
+                puts_("  "); put_hex(id & 0xFFFF, 4); put_char(':'); put_hex(id >> 16, 4);
+                puts_("  class "); put_hex(cls, 6); puts_("\n");
+            }
+}
+#endif
+
+/* The image was built 2 MiB longer than the real kernel (stub in front); kexec sized the load area with
+ * that bigger init_size, but the decompressor derives the end of its buffer from the same field starting at
+ * the real kernel (+2 MiB), so give it back the original value or it would overrun the area by 2 MiB. */
+#define STUB_SIZE 0x200000U
+
+void stage1_main(u64 boot_params)
+{
+    volatile u32 *init_size = (volatile u32 *)(unsigned long)(boot_params + 0x260);
+    *init_size -= STUB_SIZE;
+#if VARIANT >= 1
+    u64 cr0, cr3_old, cr4;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3_old));
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+
+    build_page_tables();
+
+    volatile u64 *m = (volatile u64 *)MARK_ADDR;
+    for (int i = 0; i < NMARK; i++)
+        m[i] = 0;
+
+    u32 a, b, c, d;
+    int n = 2;
+    m[n++] = boot_params;
+    m[n++] = cr0;
+    m[n++] = cr3_old;
+    m[n++] = cr4;
+    m[n++] = rdmsr(0xC0000080);                      /* EFER */
+    m[n++] = rdmsr(0x0000001B);                      /* IA32_APIC_BASE */
+    m[n++] = rdtsc();
+    cpuid(0, 0, &a, &b, &c, &d);
+    m[n++] = a;
+    m[n++] = ((u64)d << 32) | b;                     /* vendor "AuthenticAMD" pieces */
+    m[n++] = c;
+    cpuid(1, 0, &a, &b, &c, &d);
+    m[n++] = a;                                      /* family/model/stepping */
+    m[n++] = b;                                      /* APIC id in bits 31:24 */
+    m[n++] = ((u64)d << 32) | c;
+    m[n++] = (u64)(unsigned long)&pml4[0];           /* where the stub lives */
+#if VARIANT == 2
+#ifndef PAINT_BYTES
+#define PAINT_BYTES 0xF00000ULL
+#endif
+    u64 t0 = rdtsc();
+    /* Paint both scanout buffers (VRAM+0x1c000000 / +0x1e000000, 15 MiB each) through the GPU's MM_INDEX/MM_DATA
+     * window, which reaches VRAM above the 256 MiB BAR0 aperture. One colour per 64 KiB swizzle block. */
+    static const u32 palette[8] = { 0x00FF0000, 0x0000FF00, 0x000000FF, 0x00FFFFFF,
+                                    0x00FFFF00, 0x0000FFFF, 0x00FF00FF, 0x00808080 };
+    volatile u32 *gr = (volatile u32 *)0xE0600000ULL;
+    gr[0x18 / 4] = 0;                                /* MM_INDEX_HI */
+    for (int bo = 0; bo < 2; bo++) {
+        u64 base = bo ? 0x1e000000ULL : 0x1c000000ULL;
+        for (u64 off = 0; off < PAINT_BYTES; off += 4) {
+            gr[0] = (u32)((base + off) | 0x80000000ULL);
+            gr[1] = palette[((off >> 16) + bo) & 7];
+#ifdef THROTTLE
+            if ((off & (THROTTLE - 1)) == (THROTTLE - 4))
+                (void)gr[1];                         /* non-posted read: waits for the writes before it */
+#endif
+        }
+        gr[0] = (u32)(base | 0x80000000ULL);
+        m[n++] = gr[1];                              /* read-back of the first painted word */
+    }
+    m[n++] = rdtsc() - t0;                           /* TSC ticks spent painting */
+#ifdef DELAY_TICKS
+    for (u64 t1 = rdtsc(); rdtsc() - t1 < DELAY_TICKS; )   /* keep the picture up long enough to be looked at */
+        __asm__ volatile("pause");
+#endif
+    m[1] = n;
+#endif
+#if VARIANT == 3
+    /* Display endurance probe: draw a tick on the linear test buffer (VRAM+0x1a000000, pitch 10240) every second for
+     * HOLD_SECONDS, so whoever watches the screen can read off when the signal dies. */
+    volatile u32 *gr = (volatile u32 *)0xE0600000ULL;
+    const u64 LIN = 0x1a000000ULL, TSC_HZ = 1596300000ULL;
+    gr[0x18 / 4] = 0;
+    gr[0] = (u32)(LIN | 0x80000000ULL);
+    u32 sig0 = gr[1];
+    gr[0] = (u32)((LIN + 4) | 0x80000000ULL);
+    u32 sig1 = gr[1];
+    m[n++] = sig0;
+    m[n++] = sig1;
+    if (sig0 == 0xDEADBE00u && sig1 == 0xDEADBE01u) {
+        u64 start = rdtsc();
+        for (u32 sec = 0; sec < HOLD_SECONDS; sec++) {
+            u32 color = (sec % 10 == 9) ? 0xFFFF0000u : 0xFFFFFFFFu;     /* red every 10 s */
+            for (u32 y = 0; y < 40; y++) {
+                for (u32 x = 0; x < 24; x++) {
+                    u64 pos = LIN + (u64)(y + 10) * 10240 + (u64)(sec * 26 + x + 8) * 4;
+                    gr[0] = (u32)(pos | 0x80000000ULL);
+                    gr[1] = color;
+                }
+                gr[0] = (u32)(LIN | 0x80000000ULL);
+                (void)gr[1];
+            }
+            while (rdtsc() - start < (u64)(sec + 1) * TSC_HZ)
+                __asm__ volatile("pause");
+        }
+    }
+    m[1] = n;
+#endif
+#if VARIANT == 4
+    {
+        volatile u32 *sig = (volatile u32 *)FB_BASE;
+        m[n++] = sig[0];
+        m[n++] = sig[1];
+        if (sig[0] == 0xDEADBE00u && sig[1] == 0xDEADBE01u) {
+            stage4_report(boot_params);
+            u64 start = rdtsc();
+            while (rdtsc() - start < (u64)HOLD_SECONDS * 1596300000ULL)
+                __asm__ volatile("pause");
+        }
+        m[n++] = logn;
+        m[1] = n;
+    }
+#endif
+    m[0] = 0x0031425554533550ULL;                   /* "P5STUB1" tag, written last */
+    m[1] = n;
+#endif
+}
