@@ -147,6 +147,58 @@ static void stage4_report(u64 bp)
 #if VARIANT == 5
 /* Stage 1 as a loader for the EDK2 Universal Payload: the kexec initrd is a "PS5BNDL1" bundle (uefi/mkbundle.py) with
  * segments to copy to fixed physical addresses, the entry point, the HOB list address (rcx) and a stack. */
+
+extern char ps5_isr[];
+static u8 idt_mem[4096] __attribute__((aligned(16)));
+
+/* The crashed Linux left interrupts pending/armed (vectors 0xEC and 0xFD in IRR, MSI-capable devices still bus
+ * mastering). UEFI would take them with no handler, never send an EOI and the in-service bit would then block every
+ * lower-priority vector, including its own timer tick. Drain what is pending and silence the devices first. */
+static void quiesce_interrupts(volatile u32 *lapic)
+{
+    u16 cs;
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    u64 h = (u64)(unsigned long)ps5_isr;
+    for (int v = 0; v < 256; v++) {
+        volatile u8 *e = idt_mem + v * 16;
+        e[0] = h & 0xFF; e[1] = (h >> 8) & 0xFF;      /* offset 15:0 */
+        e[2] = cs & 0xFF; e[3] = cs >> 8;             /* selector */
+        e[4] = 0; e[5] = 0x8E;                        /* IST 0, present, interrupt gate */
+        e[6] = (h >> 16) & 0xFF; e[7] = (h >> 24) & 0xFF;
+        e[8] = (h >> 32) & 0xFF; e[9] = (h >> 40) & 0xFF; e[10] = (h >> 48) & 0xFF; e[11] = (h >> 56) & 0xFF;
+        e[12] = e[13] = e[14] = e[15] = 0;
+    }
+    struct { u16 limit; u64 base; } __attribute__((packed)) idtr = { 4095, (u64)(unsigned long)idt_mem };
+    __asm__ volatile("lidt %0" :: "m"(idtr));
+
+    lapic[0x350 / 4] = 0x10000;                       /* LINT0 masked */
+    lapic[0x360 / 4] = 0x10000;                       /* LINT1 masked */
+    lapic[0x80 / 4] = 0;
+    lapic[0xF0 / 4] = 0x1FF;
+    __asm__ volatile("sti");
+    for (u64 t = rdtsc(); rdtsc() - t < 3000000; ) __asm__ volatile("pause");   /* ~2 ms for the pending vectors */
+    __asm__ volatile("cli");
+}
+
+/* bus-master off for everything that is not a bridge or the display (MSI writes are bus-master writes) */
+static void quiesce_pci(void)
+{
+    static const u32 buses[3] = { 0x00, 0x20, 0x40 };
+    for (int bi = 0; bi < 3; bi++)
+        for (u32 d = 0; d < 32; d++)
+            for (u32 f = 0; f < 8; f++) {
+                u32 id = pci_cfg(buses[bi], d, f, 0);
+                if ((id & 0xFFFF) == 0xFFFF) { if (f == 0) break; continue; }
+                u32 cls = pci_cfg(buses[bi], d, f, 8) >> 24;
+                if (cls == 0x06 || cls == 0x03) continue;          /* bridges, display */
+                u32 cmd = pci_cfg(buses[bi], d, f, 4) & 0xFFFF;
+                if (cmd & 4) {
+                    outl(0xCF8, 0x80000000u | (buses[bi] << 16) | (d << 11) | (f << 8) | 4);
+                    outl(0xCFC, cmd & ~4u);
+                }
+            }
+}
+
 static void copy_bytes(u64 dst, u64 src, u64 n)
 {
     __asm__ volatile("cld; rep movsb" : "+D"(dst), "+S"(src), "+c"(n) :: "memory");
@@ -221,12 +273,16 @@ static void stage5_launch(u64 bp)
     DP(" timer test: cur0 "); put_hex(c0, 8); DP(" cur1 "); put_hex(c1, 8); DP(" delta "); put_hex(c0 - c1, 8);
     DP("  (per 1M TSC ticks)\n");
     lapic[0x380 / 4] = 0;
-    #undef DP
     cx = save_cx; cy = save_cy;
     puts_("LAPIC svr before "); put_hex(lapic[0xF0 / 4], 8);
-    lapic[0x80 / 4] = 0;                              /* task priority: accept everything */
-    lapic[0xF0 / 4] = 0x1FF;                          /* software enable, spurious vector 0xFF */
+    quiesce_pci();
     lapic[0x320 / 4] = 0x10000;                       /* timer masked until UEFI programs it */
+    quiesce_interrupts(lapic);                        /* also: TPR 0, software enable (SVR 0x1FF), LINT0/1 masked */
+    u32 isr7 = lapic[0x170 / 4], irr7 = lapic[0x270 / 4];
+    save_cx = cx; save_cy = cy; cx = 172; cy = 16;
+    DP("after flush: isr7 "); put_hex(isr7, 8); DP(" irr7 "); put_hex(irr7, 8); DP("  tpr "); put_hex(lapic[0x80 / 4], 8);
+    DP(" ppr "); put_hex(lapic[0xA0 / 4], 8); DP("\n");
+    cx = save_cx; cy = save_cy;
     puts_(" after "); put_hex(lapic[0xF0 / 4], 8); puts_("  id "); put_hex(lapic[0x20 / 4], 8); puts_("\n");
     puts_("\njumping to the UEFI payload...\n");
     __asm__ volatile("wbinvd" ::: "memory");

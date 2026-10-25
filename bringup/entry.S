@@ -18,6 +18,14 @@ startup_64:
     addq    $0x200000, %rax             /* real kernel's 64-bit entry: image base + 2 MiB + 0x200 */
     jmp     *%rax
 
+    .globl ps5_isr
+ps5_isr:
+    pushq   %rax
+    movq    $0xFEE000B0, %rax           /* local APIC EOI register */
+    movl    $0, (%rax)
+    popq    %rax
+    iretq
+
     .section .bss
     .balign 16
 stack_bottom:
