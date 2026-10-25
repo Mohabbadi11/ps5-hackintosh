@@ -126,6 +126,41 @@ SerialPortInitialize (
   return RETURN_SUCCESS;
 }
 
+STATIC
+VOID
+DrawStatus (
+  CONSOLE_STATE  *S
+  )
+{
+  //
+  // Heartbeat in the top-right corner: number of SerialPortWrite calls, cursor row/col and the TSC in ~seconds.
+  // If this stops changing the CPU is no longer printing; if it keeps changing the log is just not moving.
+  //
+  STATIC UINT32  Calls = 0;
+  UINT32         Col   = COLS - 34;
+  UINT32         I;
+  UINT64         Secs  = DivU64x32 (AsmReadTsc (), 1596300000U);
+  CHAR8          Line[40];
+  STATIC CONST CHAR8  Hex[] = "0123456789abcdef";
+
+  Calls++;
+  Line[0] = 'N'; Line[1] = '=';
+  for (I = 0; I < 6; I++) {
+    Line[2 + I] = Hex[(Calls >> ((5 - I) * 4)) & 0xF];
+  }
+
+  Line[8] = ' '; Line[9] = 'R'; Line[10] = '=';
+  Line[11] = Hex[(S->Row >> 4) & 0xF]; Line[12] = Hex[S->Row & 0xF];
+  Line[13] = ' '; Line[14] = 'T'; Line[15] = '=';
+  for (I = 0; I < 6; I++) {
+    Line[16 + I] = Hex[(Secs >> ((5 - I) * 4)) & 0xF];
+  }
+
+  for (I = 0; I < 22; I++) {
+    DrawGlyph (Col + I, 0, (UINT8)Line[I]);
+  }
+}
+
 UINTN
 EFIAPI
 SerialPortWrite (
@@ -169,6 +204,7 @@ SerialPortWrite (
     S->Col++;
   }
 
+  DrawStatus (S);
   return NumberOfBytes;
 }
 
