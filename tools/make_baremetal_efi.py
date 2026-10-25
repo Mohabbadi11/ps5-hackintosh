@@ -8,7 +8,7 @@ Reads build/opencore/EFI (fetch_opencore.sh) and opencore/config.plist, writes b
     Linux can read it after the next boot)
 Copy the result to the USB's FAT "boot" partition (mounted at /boot/efi on the PS5).
 """
-import plistlib, shutil, sys
+import os, plistlib, shutil, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,11 +25,19 @@ shutil.rmtree(ROOT / "build/baremetal-efi", ignore_errors=True)
 (OUT / "OC/Resources").mkdir()
 (OUT / "OC/Tools").mkdir()
 
-shutil.copy(SRC / "BOOT/BOOTx64.efi", OUT / "BOOT/BOOTx64.efi")
-shutil.copy(SRC / "OC/OpenCore.efi", OUT / "OC/OpenCore.efi")
+# OC_DEBUG=1 swaps in the DEBUG build of OpenCore (build/opencore-debug, from OpenCore-<ver>-DEBUG.zip): it logs the
+# memory map, slide and ExitBootServices steps, which the release build leaves out
+BIN = ROOT / "build/opencore-debug/X64/EFI" if os.environ.get("OC_DEBUG") == "1" else SRC
+shutil.copy(BIN / "BOOT/BOOTx64.efi", OUT / "BOOT/BOOTx64.efi")
+shutil.copy(BIN / "OC/OpenCore.efi", OUT / "OC/OpenCore.efi")
 drivers = ["OpenRuntime.efi", "OpenHfsPlus.efi"]
 for d in drivers:
-    shutil.copy(SRC / "OC/Drivers" / d, OUT / "OC/Drivers" / d)
+    shutil.copy(BIN / "OC/Drivers" / d, OUT / "OC/Drivers" / d)
+
+# bringup/ebstest: tells where ExitBootServices/SetVirtualAddressMap die (shows up in the picker as "EbsTest")
+ebs = ROOT / "bringup/ebstest/EbsTest.efi"
+if ebs.exists():
+    shutil.copy(ebs, OUT / "OC/Tools/EbsTest.efi")
 
 kexts = ["Lilu.kext", "VirtualSMC.kext", "SMCProcessor.kext", "RestrictEvents.kext"]
 for k in kexts:
@@ -57,10 +65,24 @@ cfg["UEFI"]["Drivers"] = [{"Arguments": "", "Comment": d, "Enabled": True, "Load
 cfg["UEFI"]["Output"]["Resolution"] = "2560x1440"
 cfg["UEFI"]["Output"]["ProvideConsoleGop"] = True
 cfg["Misc"]["Debug"]["Target"] = 67              # enable | console | file
+if os.environ.get("OC_DEBUG") == "1":
+    cfg["Misc"]["Debug"]["DisplayLevel"] = 0x80400042   # error | warn | info | verbose
 cfg["Misc"]["Boot"]["Timeout"] = 0
 cfg["Misc"]["Boot"]["ShowPicker"] = True
 cfg["Misc"]["Boot"]["HideAuxiliary"] = False
 cfg["Misc"]["Security"]["ScanPolicy"] = 0
+if ebs.exists():
+    cfg["Misc"]["Tools"] = [t for t in cfg["Misc"]["Tools"] if t["Path"] != "EbsTest.efi"] + [
+        {"Arguments": "", "Auxiliary": False, "Comment": "ExitBootServices probe", "Enabled": True, "Flavour": "Auto",
+         "FullNvramAccess": False, "Name": "EbsTest", "Path": "EbsTest.efi", "RealPath": False, "TextMode": False}]
+# TRIPWIRE=<kernel symbol>: overwrite the start of that kernel function with a deliberate triple fault (load a zero-limit
+# IDT, int3). The console then resets ("no signal") if the kernel got that far and stays frozen if it never did.
+if os.environ.get("TRIPWIRE"):
+    sym = os.environ["TRIPWIRE"]
+    cfg["Kernel"]["Patch"].insert(0, {
+        "Arch": "x86_64", "Base": sym, "Comment": f"tripwire {sym}", "Count": 1, "Enabled": True, "Find": b"",
+        "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
+        "Replace": bytes.fromhex("6A006A000F011C24CCEBFE"), "ReplaceMask": b"", "Skip": 0})
 plistlib.dump(cfg, open(OUT / "OC/config.plist", "wb"))
 print("EFI written to", OUT)
 for p in sorted(OUT.rglob("*")):
