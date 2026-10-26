@@ -14,6 +14,8 @@ sleep 2
 nohup python3 /root/kms_linear.py >/root/kms.log 2>&1 &
 sleep 25
 tail -1 /root/kms.log
+# a tripwire kernel patch in the OpenCore config needs this boot's framebuffer offset
+[ -f /root/patch_tripwire.py ] && python3 /root/patch_tripwire.py /boot/efi/EFI/OC/config.plist || true
 
 python3 - "$IMG" "$BUNDLE" <<'PY'
 import ctypes, os, sys

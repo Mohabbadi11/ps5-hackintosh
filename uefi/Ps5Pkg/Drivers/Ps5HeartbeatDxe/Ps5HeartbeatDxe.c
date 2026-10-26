@@ -50,6 +50,34 @@ Milestone (
   }
 }
 
+//
+// The same square through the GPU's I/O-port BAR (0x2000), the only path that works in kernel code with unknown page tables.
+//
+STATIC
+VOID
+MilestoneIo (
+  UINT32  Index,
+  UINT32  Colour
+  )
+{
+  UINT32  Offset;
+  UINT32  Row;
+  UINT32  Pixel;
+  UINT64  Fb = *(volatile UINT64 *)(UINTN)FB_PTR;
+
+  if (Fb == 0) {
+    Fb = FB_DEFAULT;
+  }
+
+  Offset = (UINT32)(Fb - 0x450000000ULL) + 1100 * FB_PITCH + (1000 + 160 * Index) * 4;
+  for (Row = 0; Row < 64; Row++) {
+    for (Pixel = 0; Pixel < 128; Pixel++) {
+      IoWrite32 (0x2000, (Offset + Row * FB_PITCH + Pixel * 4) | 0x80000000U);
+      IoWrite32 (0x2004, Colour);
+    }
+  }
+}
+
 STATIC
 VOID
 EFIAPI
@@ -70,6 +98,7 @@ OnExitBs (
   )
 {
   Milestone (1, 0xFF00FF00U);          // green: ExitBootServices signalled
+  MilestoneIo (2, 0xFF0000FFU);        // blue: the same through the I/O-port BAR
 }
 
 STATIC

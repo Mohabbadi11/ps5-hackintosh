@@ -70,10 +70,29 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
         for (volatile UINT32 i = 0; i < 20000000; i++) { }
         Square(6, (n & 1) ? 0xFFFFFFFF : 0xFF404040);
     }
-    /* validate bringup/tripwire: paint a red square through the GPU registers (never returns) */
+    /* 1. time the I/O-port painting of a 64x32 square (IO port 0x2000 = MM_INDEX, 0x2004 = MM_DATA) and show the elapsed
+     *    TSC as a bar below the squares, 1 pixel per 4 ms; 2. run a copy of the tripwire code with this boot's framebuffer
+     *    offset patched in (it paints a red square and never returns). */
     Square(7, 0xFFFF8000);
-    *(volatile UINT32 *)0x63000ULL = (UINT32)((UINTN)Fb - 0x450000000ULL);
-    extern void tw_start(void);
-    tw_start();
+    UINT32 Off = (UINT32)((UINTN)Fb - 0x450000000ULL);
+    UINT64 T0, T1;
+    __asm__ volatile("rdtsc; shlq $32, %%rdx; orq %%rdx, %%rax" : "=a"(T0) :: "rdx");
+    for (UINTN y = 0; y < 32; y++)
+        for (UINTN x = 0; x < 64; x++) {
+            UINT32 Idx = (Off + (UINT32)(1100 + y) * 10240 + (UINT32)(1640 + x) * 4) | 0x80000000U;
+            __asm__ volatile("outl %0, %w1" :: "a"(Idx), "Nd"((UINT16)0x2000));
+            __asm__ volatile("outl %0, %w1" :: "a"((UINT32)0xFF00FF00), "Nd"((UINT16)0x2004));
+        }
+    __asm__ volatile("rdtsc; shlq $32, %%rdx; orq %%rdx, %%rax" : "=a"(T1) :: "rdx");
+    UINT64 Ms4 = (T1 - T0) / (1596300ULL * 4);
+    for (UINTN y = 90; y < 100; y++)
+        for (UINTN x = 0; x < Ms4 && x < 700; x++)
+            Fb[y * Pitch + x] = 0xFFFFFFFF;
+    extern char tw_start[], tw_end[];
+    UINT8 *Copy;
+    St->BootServices->AllocatePool(EfiLoaderCode, 256, (VOID **)&Copy);
+    for (UINTN i = 0; i < (UINTN)(tw_end - tw_start); i++) Copy[i] = ((UINT8 *)tw_start)[i];
+    *(UINT32 *)(Copy + 2) = Off;
+    ((void (*)(void))Copy)();
     for (;;) { }
 }

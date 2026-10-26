@@ -76,14 +76,16 @@ if ebs.exists():
         {"Arguments": "", "Auxiliary": False, "Comment": "ExitBootServices probe", "Enabled": True, "Flavour": "Auto",
          "FullNvramAccess": False, "Name": "EbsTest", "Path": "EbsTest.efi", "RealPath": False, "TextMode": False}]
 # TRIPWIRE=<kernel symbol>=<AARRGGBB>: overwrite the start of that kernel function with bringup/tripwire, which paints a
-# square of that colour on the screen through the GPU registers and spins. Reaching it proves the kernel got that far.
+# square of that colour on the screen through the GPU's I/O ports and spins (bringup/tools/patch_tripwire.py then fixes the
+# VRAM offset on the console). Reaching it proves the kernel got that far.
 # (A deliberate triple fault is no use: on this console it freezes the picture instead of resetting.)
 if os.environ.get("TRIPWIRE"):
     import subprocess, tempfile
     sym, colour = os.environ["TRIPWIRE"].split("=")
     llvm = os.environ.get("LLVM_BIN", "/opt/homebrew/opt/llvm@18/bin")
     with tempfile.TemporaryDirectory() as td:
-        subprocess.check_call([f"{llvm}/clang", "-target", "x86_64-unknown-none-elf", "-c", f"-DCOLOUR=0x{colour}",
+        subprocess.check_call([f"{llvm}/clang", "-target", "i386-unknown-none-elf", "-c", f"-DCOLOUR=0x{colour}",
+                               "-DVRAM_OFFSET=0x1a000000",
                                str(ROOT / "bringup/tripwire/tripwire.S"), "-o", f"{td}/tw.o"])
         subprocess.check_call([f"{llvm}/llvm-objcopy", "-O", "binary", "--only-section=.text", f"{td}/tw.o", f"{td}/tw.bin"])
         code = open(f"{td}/tw.bin", "rb").read()
