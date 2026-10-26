@@ -17,12 +17,16 @@ if pos is None:
 path = sys.argv[1]
 cfg = plistlib.load(open(path, "rb"))
 n = 0
+PLACEHOLDER = bytes.fromhex("0df0adde")            # 0xDEADF00D, the ktty console's VRAM offset
 for p in cfg["Kernel"]["Patch"]:
     if p["Comment"].startswith("tripwire"):
         r = bytearray(p["Replace"])
         assert r[0] == 0xFA and r[1] == 0xBE, "unexpected tripwire code"
         r[2:6] = struct.pack("<I", pos)
         p["Replace"] = bytes(r)
+        n += 1
+    elif p["Comment"].startswith("ktty") and PLACEHOLDER in p["Replace"]:
+        p["Replace"] = p["Replace"].replace(PLACEHOLDER, struct.pack("<I", pos))
         n += 1
 plistlib.dump(cfg, open(path, "wb"))
 print(f"framebuffer at VRAM+{pos:#x} (phys {CARVEOUT + pos:#x}); patched {n} tripwire(s) in {path}")

@@ -93,6 +93,14 @@ if os.environ.get("TRIPWIRE"):
         "Arch": "x86_64", "Base": sym, "Comment": f"tripwire {sym}", "Count": 1, "Enabled": True, "Find": b"",
         "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
         "Replace": code, "ReplaceMask": b"", "Skip": 0})
+# KTTY=1: show the whole kernel console (printf/kprintf) on the screen, see bringup/ktty and tools/make_ktty.py
+if os.environ.get("KTTY") == "1":
+    sys.path.insert(0, str(ROOT / "tools"))
+    import make_ktty
+    cfg["Kernel"]["Patch"] = make_ktty.patches() + cfg["Kernel"]["Patch"]
+    args = cfg["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"]["boot-args"]
+    if "serial=" not in args:
+        cfg["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"]["boot-args"] = args + " serial=3"
 plistlib.dump(cfg, open(OUT / "OC/config.plist", "wb"))
 print("EFI written to", OUT)
 for p in sorted(OUT.rglob("*")):

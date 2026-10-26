@@ -14,3 +14,4 @@ tools/__pycache__/
 .DS_Store
 bringup/ebstest/*.o
 bringup/ebstest/*.efi
+bringup/ebstest/ktty_blob.h

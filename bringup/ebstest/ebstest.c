@@ -6,6 +6,7 @@
  */
 #include <Uefi.h>
 #include <Protocol/GraphicsOutput.h>
+#include "ktty_blob.h"
 
 static volatile UINT32 *Fb;
 static UINTN Pitch;
@@ -88,10 +89,16 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
     for (UINTN y = 90; y < 100; y++)
         for (UINTN x = 0; x < Ms4 && x < 700; x++)
             Fb[y * Pitch + x] = 0xFFFFFFFF;
-    extern char tw_start[], tw_end[];
-    static UINT8 Copy[256] __attribute__((aligned(16)));
-    for (UINTN i = 0; i < (UINTN)(tw_end - tw_start); i++) Copy[i] = ((UINT8 *)tw_start)[i];
-    *(UINT32 *)(Copy + 2) = Off;
-    ((void (*)(void))Copy)();
+    /* 3. run the kernel text console (bringup/ktty) on a test text: 130 numbered lines, so the screen wraps once */
+    static UINT8 Blob[sizeof(ktty_blob)] __attribute__((aligned(16)));
+    for (UINTN i = 0; i < sizeof(ktty_blob); i++) Blob[i] = ktty_blob[i];
+    for (UINTN i = 0; i + 4 <= sizeof(Blob); i++)
+        if (*(UINT32 *)(Blob + i) == 0xDEADF00DU) *(UINT32 *)(Blob + i) = Off;
+    void (*Putc)(UINT8) = (void (*)(UINT8))(Blob + 0x80);
+    for (UINT32 n = 0; n < 130; n++) {
+        char Line[64] = "ktty test line 000 - the quick brown fox 0123456789 {}[]()<>\n";
+        Line[15] = '0' + (n / 100) % 10; Line[16] = '0' + (n / 10) % 10; Line[17] = '0' + n % 10;
+        for (UINTN i = 0; Line[i]; i++) Putc((UINT8)Line[i]);
+    }
     for (;;) { }
 }
