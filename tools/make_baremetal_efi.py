@@ -67,6 +67,15 @@ cfg["UEFI"]["Output"]["ProvideConsoleGop"] = True
 cfg["Misc"]["Debug"]["Target"] = 67              # enable | console | file
 if os.environ.get("OC_DEBUG") == "1":
     cfg["Misc"]["Debug"]["DisplayLevel"] = 0x80400042   # error | warn | info | verbose
+# The console has no SMBIOS memory tables, so boot.efi reports PhysicalMemorySize = 0 and XNU sizes its physical-memory window
+# (physmap) at PhysicalMemorySize + 4 GiB = 4 GiB: touching RAM above that panics with "PHYSMAP_PTOV bounds exceeded".
+# Describe the PS5's 16 GB (2 x 8 GB) so the window covers all of it.
+cfg["PlatformInfo"]["CustomMemory"] = True
+cfg["PlatformInfo"]["Memory"] = {
+    "DataWidth": 64, "ErrorCorrection": 3, "FormFactor": 13, "MaxCapacity": 16 * 1024 ** 3, "TotalWidth": 64, "Type": 26,
+    "TypeDetail": 128,
+    "Devices": [{"AssetTag": "Unknown", "BankLocator": f"BANK {i}", "DeviceLocator": f"DIMM{i}", "Manufacturer": "Unknown",
+                 "PartNumber": "Unknown", "SerialNumber": "Unknown", "Size": 8192, "Speed": 3200} for i in range(2)]}
 cfg["Misc"]["Boot"]["Timeout"] = 0
 cfg["Misc"]["Boot"]["ShowPicker"] = True
 cfg["Misc"]["Boot"]["HideAuxiliary"] = False
