@@ -300,6 +300,7 @@ static void stage5_launch(u64 bp)
     u64 fbpatch = *(volatile u64 *)(img + 32);
     u32 count = *(volatile u32 *)(img + 40);
     u64 realfb = (u64)(unsigned long)fb, fbaddr = realfb;
+    *(volatile u32 *)0x63000ULL = (u32)(realfb - 0x450000000ULL);   /* VRAM offset of the picture, for bringup/tripwire */
     puts_("entry "); put_hex(entry, 12); puts_("  hob list "); put_hex(rcx, 12); puts_("  rsp "); put_hex(rsp, 12);
     puts_("  segments "); put_hex(count, 2); puts_("\n");
     for (u32 i = 0; i < count; i++) {

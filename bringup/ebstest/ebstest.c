@@ -2,7 +2,7 @@
  * Draws one coloured square per milestone straight into the GOP framebuffer (usable after ExitBootServices), then an
  * animated "alive" square. Run it from the OpenCore picker (OC/Tools/EbsTest.efi). Squares, left to right:
  *   white  app started          yellow pre-ExitBootServices         green ExitBootServices returned
- *   cyan   SetVirtualAddressMap returned        magenta GetTime ok (red = error)        blue  loop reached
+ *   cyan   SetVirtualAddressMap returned        magenta GetTime ok (red = error)        blue  loop reached, then 16 blinks, an orange square and the tripwire's red square at the bottom right
  */
 #include <Uefi.h>
 #include <Protocol/GraphicsOutput.h>
@@ -66,8 +66,14 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
     Square(4, Status == EFI_SUCCESS ? 0xFFFF00FF : 0xFFFF0000);
     Square(5, 0xFF0000FF);
 
-    for (UINT32 n = 0;; n++) {
+    for (UINT32 n = 0; n < 16; n++) {
         for (volatile UINT32 i = 0; i < 20000000; i++) { }
         Square(6, (n & 1) ? 0xFFFFFFFF : 0xFF404040);
     }
+    /* validate bringup/tripwire: paint a red square through the GPU registers (never returns) */
+    Square(7, 0xFFFF8000);
+    *(volatile UINT32 *)0x63000ULL = (UINT32)((UINTN)Fb - 0x450000000ULL);
+    extern void tw_start(void);
+    tw_start();
+    for (;;) { }
 }

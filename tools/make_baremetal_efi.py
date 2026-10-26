@@ -75,14 +75,22 @@ if ebs.exists():
     cfg["Misc"]["Tools"] = [t for t in cfg["Misc"]["Tools"] if t["Path"] != "EbsTest.efi"] + [
         {"Arguments": "", "Auxiliary": False, "Comment": "ExitBootServices probe", "Enabled": True, "Flavour": "Auto",
          "FullNvramAccess": False, "Name": "EbsTest", "Path": "EbsTest.efi", "RealPath": False, "TextMode": False}]
-# TRIPWIRE=<kernel symbol>: overwrite the start of that kernel function with a deliberate triple fault (load a zero-limit
-# IDT, int3). The console then resets ("no signal") if the kernel got that far and stays frozen if it never did.
+# TRIPWIRE=<kernel symbol>=<AARRGGBB>: overwrite the start of that kernel function with bringup/tripwire, which paints a
+# square of that colour on the screen through the GPU registers and spins. Reaching it proves the kernel got that far.
+# (A deliberate triple fault is no use: on this console it freezes the picture instead of resetting.)
 if os.environ.get("TRIPWIRE"):
-    sym = os.environ["TRIPWIRE"]
+    import subprocess, tempfile
+    sym, colour = os.environ["TRIPWIRE"].split("=")
+    llvm = os.environ.get("LLVM_BIN", "/opt/homebrew/opt/llvm@18/bin")
+    with tempfile.TemporaryDirectory() as td:
+        subprocess.check_call([f"{llvm}/clang", "-target", "x86_64-unknown-none-elf", "-c", f"-DCOLOUR=0x{colour}",
+                               str(ROOT / "bringup/tripwire/tripwire.S"), "-o", f"{td}/tw.o"])
+        subprocess.check_call([f"{llvm}/llvm-objcopy", "-O", "binary", "--only-section=.text", f"{td}/tw.o", f"{td}/tw.bin"])
+        code = open(f"{td}/tw.bin", "rb").read()
     cfg["Kernel"]["Patch"].insert(0, {
         "Arch": "x86_64", "Base": sym, "Comment": f"tripwire {sym}", "Count": 1, "Enabled": True, "Find": b"",
         "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
-        "Replace": bytes.fromhex("6A006A000F011C24CCEBFE"), "ReplaceMask": b"", "Skip": 0})
+        "Replace": code, "ReplaceMask": b"", "Skip": 0})
 plistlib.dump(cfg, open(OUT / "OC/config.plist", "wb"))
 print("EFI written to", OUT)
 for p in sorted(OUT.rglob("*")):
