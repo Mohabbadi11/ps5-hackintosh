@@ -23,6 +23,11 @@
   UefiBootServicesTableLib
   BaseLib
   DebugLib
+  IoLib
+
+[Guids]
+  gEfiEventExitBootServicesGuid
+  gEfiEventBeforeExitBootServicesGuid
 
 [Depex]
   gEfiTimerArchProtocolGuid

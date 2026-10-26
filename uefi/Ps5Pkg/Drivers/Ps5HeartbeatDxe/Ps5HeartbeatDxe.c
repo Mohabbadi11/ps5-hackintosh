@@ -6,6 +6,8 @@
 #include <Library/BaseLib.h>
 #include <Library/DebugLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/IoLib.h>
+#include <Guid/EventGroup.h>
 #include "font8x16.h"
 
 #define FB_DEFAULT  0x46a000000ULL
@@ -17,6 +19,58 @@
 #define PS5_TSC_HZ  1596300000U
 
 STATIC UINT32  mTicks;
+
+//
+// Milestone squares for debugging what an OS loader's ExitBootServices does: painted through the GPU's MM_INDEX/MM_DATA
+// window (BAR5 at 0xE0600000), so they work whatever page tables are active. Square N sits at row 1100, pixel 1000 + 160 N.
+//
+STATIC
+VOID
+Milestone (
+  UINT32  Index,
+  UINT32  Colour
+  )
+{
+  UINT32  Offset;
+  UINT32  Row;
+  UINT32  Pixel;
+  UINT64  Fb = *(volatile UINT64 *)(UINTN)FB_PTR;
+
+  if (Fb == 0) {
+    Fb = FB_DEFAULT;
+  }
+
+  MmioWrite32 (0xE0600000ULL + 0x18, 0);
+  Offset = (UINT32)(Fb - 0x450000000ULL) + 1100 * FB_PITCH + (1000 + 160 * Index) * 4;
+  for (Row = 0; Row < 64; Row++) {
+    for (Pixel = 0; Pixel < 128; Pixel++) {
+      MmioWrite32 (0xE0600000ULL, (Offset + Row * FB_PITCH + Pixel * 4) | 0x80000000U);
+      MmioWrite32 (0xE0600004ULL, Colour);
+    }
+  }
+}
+
+STATIC
+VOID
+EFIAPI
+OnBeforeExitBs (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  Milestone (0, 0xFFFFFF00U);          // yellow: BeforeExitBootServices signalled
+}
+
+STATIC
+VOID
+EFIAPI
+OnExitBs (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  Milestone (1, 0xFF00FF00U);          // green: ExitBootServices signalled
+}
 
 STATIC
 VOID
@@ -94,6 +148,8 @@ HeartbeatEntry (
     Status = gBS->SetTimer (Event, TimerPeriodic, 5000000);      // 500 ms
   }
 
+  gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, OnBeforeExitBs, NULL, &gEfiEventBeforeExitBootServicesGuid, &Event);
+  gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, OnExitBs, NULL, &gEfiEventExitBootServicesGuid, &Event);
   DEBUG ((DEBUG_INFO, "Ps5HeartbeatDxe: timer started: %r\n", Status));
   return EFI_SUCCESS;
 }
