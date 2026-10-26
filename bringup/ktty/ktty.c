@@ -13,7 +13,10 @@ typedef unsigned int u32;
 
 #include "ktty_font.h"
 
-#define KTTY_FB_OFF 0xDEADF00Du            /* placeholder: VRAM offset of pixel (0,0), rewritten by patch_tripwire.py */
+/* VRAM offset of pixel (0,0): a placeholder rewritten by patch_tripwire.py. Volatile so that the compiler keeps it as one
+ * 32-bit load from the blob (a constant would be folded into other immediates the patcher cannot find). */
+static volatile const u32 ktty_fb_off __attribute__((used)) = 0xDEADF00Du;
+#define KTTY_FB_OFF ktty_fb_off
 #define PITCH       10240u
 #define COLS        320u
 #define ROWS        89u

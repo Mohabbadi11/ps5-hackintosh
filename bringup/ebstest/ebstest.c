@@ -94,7 +94,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
     for (UINTN i = 0; i < sizeof(ktty_blob); i++) Blob[i] = ktty_blob[i];
     for (UINTN i = 0; i + 4 <= sizeof(Blob); i++)
         if (*(UINT32 *)(Blob + i) == 0xDEADF00DU) *(UINT32 *)(Blob + i) = Off;
-    void (*Putc)(UINT8) = (void (*)(UINT8))(Blob + 0x80);
+    __attribute__((sysv_abi)) void (*Putc)(UINT8) = (__attribute__((sysv_abi)) void (*)(UINT8))(Blob + 0x80);   /* System V ABI: first argument in rdi */
     for (UINT32 n = 0; n < 130; n++) {
         char Line[64] = "ktty test line 000 - the quick brown fox 0123456789 {}[]()<>\n";
         Line[15] = '0' + (n / 100) % 10; Line[16] = '0' + (n / 10) % 10; Line[17] = '0' + n % 10;
