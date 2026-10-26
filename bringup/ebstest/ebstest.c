@@ -89,8 +89,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
         for (UINTN x = 0; x < Ms4 && x < 700; x++)
             Fb[y * Pitch + x] = 0xFFFFFFFF;
     extern char tw_start[], tw_end[];
-    UINT8 *Copy;
-    St->BootServices->AllocatePool(EfiLoaderCode, 256, (VOID **)&Copy);
+    static UINT8 Copy[256] __attribute__((aligned(16)));
     for (UINTN i = 0; i < (UINTN)(tw_end - tw_start); i++) Copy[i] = ((UINT8 *)tw_start)[i];
     *(UINT32 *)(Copy + 2) = Off;
     ((void (*)(void))Copy)();
