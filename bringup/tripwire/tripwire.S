@@ -11,7 +11,7 @@
 tw_start:
     cli
     movl    $VRAM_OFFSET, %esi            /* offset of pixel (0,0); patched */
-    addl    $0xABF220, %esi               /* row 1100, pixel 1640: to the right of the firmware milestones, clear of the log text */
+    addl    $0xABF9A0, %esi               /* row 1100, pixel 1640: to the right of the firmware milestones, clear of the log text */
     movl    $32, %ebx                     /* rows */
 1:  movl    $64, %ecx                     /* pixels per row */
     movl    %esi, %edi
