@@ -76,13 +76,17 @@ cfg["PlatformInfo"]["Memory"] = {
     "TypeDetail": 128,
     "Devices": [{"AssetTag": "Unknown", "BankLocator": f"BANK {i}", "DeviceLocator": f"DIMM{i}", "Manufacturer": "Unknown",
                  "PartNumber": "Unknown", "SerialNumber": "Unknown", "Size": 8192, "Speed": 3200} for i in range(2)]}
-# XNU 21.6 derives core_count/thread_count from MSR 0x35, which the AMD CPU does not have; with OpenCore's CPU-info patches the
-# result was 0 and cpu_thread_alloc() divided by it (#DE). Fix both copies of the "msr == 0 ? (1 << 16) | 1 : msr" sequence
-# in cpuid_set_info: or edx,eax / mov ecx,0x10001 / cmovne ecx,eax  ->  mov ecx,0x00080010 (8 cores, 16 threads) + nops.
-cfg["Kernel"]["Patch"].insert(0, {
-    "Arch": "x86_64", "Base": "_cpuid_set_info", "Comment": "ps5 - core_count 8, thread_count 16", "Count": 2, "Enabled": True,
-    "Find": bytes.fromhex("09c2b9010001000f45c8"), "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "21.99.99",
-    "MinKernel": "21.0.0", "Replace": bytes.fromhex("b9100008009090909090"), "ReplaceMask": b"", "Skip": 0})
+# XNU 21.6 derives core_count/thread_count from MSR 0x35, which the AMD CPU does not have; after OpenCore's own CPU-info patches
+# the counters end up as core_count 16 / thread_count 0 and initTopoParms() (inlined in cpu_thread_alloc) divides by zero (#DE).
+# OpenCore rewrites the MSR code before the user patches run, so fix the readers instead: cpu_thread_alloc sees 8 cores, 16 threads.
+for find, repl, count in (("8b9890010000", "bb0800000090", 1),            # mov ebx,[rax+400]  -> mov ebx,8
+                          ("8bb094010000", "be1000000090", 1),            # mov esi,[rax+404]  -> mov esi,16
+                          ("418b8f90010000", "b9080000009090", 2),        # mov ecx,[r15+400]  -> mov ecx,8
+                          ("418b8794010000", "b8100000009090", 1)):       # mov eax,[r15+404]  -> mov eax,16
+    cfg["Kernel"]["Patch"].insert(0, {
+        "Arch": "x86_64", "Base": "_cpu_thread_alloc", "Comment": "ps5 - topology counts " + find[:8], "Count": count,
+        "Enabled": True, "Find": bytes.fromhex(find), "Identifier": "kernel", "Limit": 0x400, "Mask": b"",
+        "MaxKernel": "21.99.99", "MinKernel": "21.0.0", "Replace": bytes.fromhex(repl), "ReplaceMask": b"", "Skip": 0})
 cfg["Misc"]["Boot"]["Timeout"] = 0
 cfg["Misc"]["Boot"]["ShowPicker"] = True
 cfg["Misc"]["Boot"]["HideAuxiliary"] = False
