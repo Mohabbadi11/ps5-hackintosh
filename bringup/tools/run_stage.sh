@@ -31,5 +31,7 @@ print("kexec_file_load:", r, os.strerror(ctypes.get_errno()), "crash_loaded:", o
 PY
 sync
 echo 1 > /proc/sys/kernel/sysrq
-nohup sh -c "sleep 1; echo c > /proc/sysrq-trigger" >/dev/null 2>&1 &
+# the CPU that takes the crash becomes the one running UEFI and macOS: it has to be the boot processor (CPU 0), because XNU
+# panics with "Unexpected local APIC state" in lapic_init() on any other core (IA32_APIC_BASE.BSP clear)
+nohup taskset -c 0 sh -c "sleep 1; echo c > /proc/sysrq-trigger" >/dev/null 2>&1 &
 echo "crashing into the stage in 1 s"
