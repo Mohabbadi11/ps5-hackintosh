@@ -76,6 +76,13 @@ cfg["PlatformInfo"]["Memory"] = {
     "TypeDetail": 128,
     "Devices": [{"AssetTag": "Unknown", "BankLocator": f"BANK {i}", "DeviceLocator": f"DIMM{i}", "Manufacturer": "Unknown",
                  "PartNumber": "Unknown", "SerialNumber": "Unknown", "Size": 8192, "Speed": 3200} for i in range(2)]}
+# XNU 21.6 derives core_count/thread_count from MSR 0x35, which the AMD CPU does not have; with OpenCore's CPU-info patches the
+# result was 0 and cpu_thread_alloc() divided by it (#DE). Fix both copies of the "msr == 0 ? (1 << 16) | 1 : msr" sequence
+# in cpuid_set_info: or edx,eax / mov ecx,0x10001 / cmovne ecx,eax  ->  mov ecx,0x00080010 (8 cores, 16 threads) + nops.
+cfg["Kernel"]["Patch"].insert(0, {
+    "Arch": "x86_64", "Base": "_cpuid_set_info", "Comment": "ps5 - core_count 8, thread_count 16", "Count": 2, "Enabled": True,
+    "Find": bytes.fromhex("09c2b9010001000f45c8"), "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "21.99.99",
+    "MinKernel": "21.0.0", "Replace": bytes.fromhex("b9100008009090909090"), "ReplaceMask": b"", "Skip": 0})
 cfg["Misc"]["Boot"]["Timeout"] = 0
 cfg["Misc"]["Boot"]["ShowPicker"] = True
 cfg["Misc"]["Boot"]["HideAuxiliary"] = False
