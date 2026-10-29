@@ -93,6 +93,14 @@ for find, n in TOPO:
         "Arch": "x86_64", "Base": "_cpu_thread_alloc", "Comment": "ps5 - topology div " + find[:8], "Count": 1,
         "Enabled": True, "Find": bytes.fromhex(find), "Identifier": "kernel", "Limit": 0x400, "Mask": b"",
         "MaxKernel": "21.99.99", "MinKernel": "21.0.0", "Replace": bytes.fromhex(repl), "ReplaceMask": b"", "Skip": 0})
+# cpuid_set_cache_info falls back to the Intel CPUID leaf 2 descriptors, which AMD does not provide: cache_linesize stays 0 and
+# the kernel panics "no linesize" (cpuid.c:520). Force a 64-byte line (Zen 2):
+#   mov r14d,[rbp-72] ; test r14d,r14d ; je panic   ->   mov r14d,64 ; 7 nops
+cfg["Kernel"]["Patch"].insert(0, {
+    "Arch": "x86_64", "Base": "_cpuid_wa_required", "Comment": "ps5 - cache linesize 64", "Count": 1, "Enabled": True,
+    "Find": bytes.fromhex("448b75b84585f60f8405010000"), "Identifier": "kernel", "Limit": 0x1000, "Mask": b"",
+    "MaxKernel": "21.99.99", "MinKernel": "21.0.0", "Replace": bytes.fromhex("41be4000000090909090909090"),
+    "ReplaceMask": b"", "Skip": 0})
 cfg["Misc"]["Boot"]["Timeout"] = 0
 cfg["Misc"]["Boot"]["ShowPicker"] = True
 cfg["Misc"]["Boot"]["HideAuxiliary"] = False
