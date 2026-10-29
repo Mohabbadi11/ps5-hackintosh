@@ -146,11 +146,17 @@ if os.environ.get("TRIPWIRE"):
 # RETURN=1: a panic/reboot (kernel halt_all_cpus) jumps back into the Linux crash kernel instead of resetting the console: Linux
 # comes back with all of macOS' RAM readable (tools/macos_log.py). KTTY_RETURN="text" does the same when the console prints it.
 if os.environ.get("RETURN") == "1":
+    import subprocess, tempfile
+    llvm = os.environ.get("LLVM_BIN", "/opt/homebrew/opt/llvm@18/bin")
+    with tempfile.TemporaryDirectory() as td:
+        subprocess.check_call([f"{llvm}/clang", "-target", "x86_64-unknown-none-elf", "-I", str(ROOT / "bringup/retlinux"), "-c",
+                               str(ROOT / "bringup/retlinux/retkern.S"), "-o", f"{td}/rk.o"])
+        subprocess.check_call([f"{llvm}/llvm-objcopy", "-O", "binary", "--only-section=.text", f"{td}/rk.o", f"{td}/rk.bin"])
+        retkern = open(f"{td}/rk.bin", "rb").read()
     cfg["Kernel"]["Patch"].insert(0, {
         "Arch": "x86_64", "Base": "_halt_all_cpus", "Comment": "ps5 - return to Linux", "Count": 1, "Enabled": True, "Find": b"",
         "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
-        # cli; mov $0x64000,%rax; mov %rax,%cr3; mov $0x67200,%rax; jmp *%rax
-        "Replace": bytes.fromhex("fa" "48c7c000400600" "0f22d8" "48c7c000720600" "ffe0"), "ReplaceMask": b"", "Skip": 0})
+        "Replace": retkern, "ReplaceMask": b"", "Skip": 0})
 # KTTY=1: show the whole kernel console (printf/kprintf) on the screen, see bringup/ktty and tools/make_ktty.py
 if os.environ.get("KTTY") == "1":
     sys.path.insert(0, str(ROOT / "tools"))

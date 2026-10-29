@@ -80,7 +80,7 @@ void ktty_main(u8 c)
     out32(0x2000, (state_off + 4) | 0x80000000u);
     out32(0x2004, 0xA5000000u | ridx);
     if (ridx == sizeof(rpat) - 1)
-        __asm__ volatile("cli; mov $0x64000, %%rax; mov %%rax, %%cr3; mov $0x67200, %%rax; jmp *%%rax" ::: "rax");
+        __asm__ volatile("lea ktty_main(%%rip), %%rax; add $%c0, %%rax; jmp *%%rax" :: "i"(KTTY_HALT_DELTA) : "rax");   /* the patched _halt_all_cpus */
 #endif
     u32 col = st & 0x1FF, row = (st >> 9) & 0x7F, wrapped = (st >> 16) & 1, pmode = (st >> 17) & 1, midx = (st >> 18) & 7;
 

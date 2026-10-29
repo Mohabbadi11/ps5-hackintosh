@@ -8,13 +8,16 @@
  *   0x63010 Linux entry (startup_64 + 2 MiB), 0x63018 boot_params
  * Then it behaves like the tail of stage1_main: rsi = boot_params, jump to the real kernel. */
     .code64
+#include "paint.inc"
     .globl rl_start, rl_next, rl_end
 rl_start:
+    PAINT 0xFFFFFF00, 2200, 0x63000                /* yellow: the kernel's CR3 switch worked, running in low memory */
     lgdt    0x67100
     movl    $0x20, %eax                   /* CR4 = PAE only: drops SMEP/SMAP/PCID/PGE the kernel had enabled */
     movq    %rax, %cr4
     rex64 ljmp *0x67110                   /* reload CS with our 64-bit code segment */
 rl_next:
+    PAINT 0xFF00FF00, 2300, 0x63000                /* green: CS reloaded with our GDT */
     movw    $0x10, %ax
     movw    %ax, %ds
     movw    %ax, %es

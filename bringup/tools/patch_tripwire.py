@@ -25,7 +25,7 @@ for p in cfg["Kernel"]["Patch"]:
         r[2:6] = struct.pack("<I", pos)
         p["Replace"] = bytes(r)
         n += 1
-    elif p["Comment"].startswith("ktty") and PLACEHOLDER in p["Replace"]:
+    elif p["Comment"].startswith(("ktty", "ps5 - return")) and PLACEHOLDER in p["Replace"]:
         p["Replace"] = p["Replace"].replace(PLACEHOLDER, struct.pack("<I", pos))
         n += 1
 plistlib.dump(cfg, open(path, "wb"))

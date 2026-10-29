@@ -396,7 +396,7 @@ static void stage5_launch(u64 bp)
         volatile u64 *gdt_ = (volatile u64 *)0x67000ULL;
         gdt_[0] = 0; gdt_[1] = 0x00CF9A000000FFFFULL; gdt_[2] = 0x00CF92000000FFFFULL; gdt_[3] = 0x00AF9A000000FFFFULL;
         *(volatile u16 *)0x67100ULL = 0x1F; *(volatile u64 *)0x67102ULL = 0x67000;       /* GDTR */
-        *(volatile u64 *)0x67110ULL = 0x67218; *(volatile u16 *)0x67118ULL = 0x18;      /* far pointer to rl_next, code64 */
+        *(volatile u64 *)0x67110ULL = RL_NEXT; *(volatile u16 *)0x67118ULL = 0x18;      /* far pointer to rl_next, code64 */
         for (unsigned i = 0; i < sizeof(retlow_code); i++) *(volatile u8 *)(0x67200ULL + i) = retlow_code[i];
         *(volatile u64 *)0x63010ULL = (u64)(unsigned long)startup_64 + 0x200000;          /* the real kernel's 64-bit entry */
         *(volatile u64 *)0x63018ULL = bp;                                                  /* boot_params */

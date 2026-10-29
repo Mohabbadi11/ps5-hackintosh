@@ -19,13 +19,14 @@ CFLAGS="-target x86_64-unknown-none-elf -ffreestanding -fno-stack-protector -mno
         -fPIE -fvisibility=hidden -fno-builtin -O2"
 "$L/clang" -target x86_64-unknown-none-elf -c "$HERE/entry.S" -o "$OUT/entry.o"
 # the low-memory "return to Linux" stub (linked at its fixed physical address) as a C array for stub.c
-"$L/clang" -target x86_64-unknown-none-elf -c "$HERE/retlinux/retlow.S" -o "$OUT/retlow.o"
+"$L/clang" -target x86_64-unknown-none-elf -I"$HERE/retlinux" -c "$HERE/retlinux/retlow.S" -o "$OUT/retlow.o"
 "$L/ld.lld" -nostdlib -static -e rl_start -Ttext=0x67200 "$OUT/retlow.o" -o "$OUT/retlow.elf"
 "$L/llvm-objcopy" -O binary --only-section=.text "$OUT/retlow.elf" "$OUT/retlow.bin"
-python3 - "$OUT/retlow.bin" "$OUT/retlow.h" <<'PY'
+RL_NEXT=$("$L/llvm-nm" "$OUT/retlow.elf" | awk '/ rl_next$/ {print $1}')
+python3 - "$OUT/retlow.bin" "$OUT/retlow.h" "$RL_NEXT" <<'PY'
 import sys
 d = open(sys.argv[1], "rb").read()
-open(sys.argv[2], "w").write("static const unsigned char retlow_code[%d] = {%s};\n" % (len(d), ",".join("0x%02x" % x for x in d)))
+open(sys.argv[2], "w").write("#define RL_NEXT 0x%s\nstatic const unsigned char retlow_code[%d] = {%s};\n" % (sys.argv[3], len(d), ",".join("0x%02x" % x for x in d)))
 PY
 
 build() {  # name defines...
