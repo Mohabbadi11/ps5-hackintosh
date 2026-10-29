@@ -76,19 +76,21 @@ cfg["PlatformInfo"]["Memory"] = {
     "TypeDetail": 128,
     "Devices": [{"AssetTag": "Unknown", "BankLocator": f"BANK {i}", "DeviceLocator": f"DIMM{i}", "Manufacturer": "Unknown",
                  "PartNumber": "Unknown", "SerialNumber": "Unknown", "Size": 8192, "Speed": 3200} for i in range(2)]}
-# XNU 21.6 derives core_count/thread_count from MSR 0x35, which the AMD CPU does not have; after OpenCore's own CPU-info patches
-# the counters end up as core_count 16 / thread_count 0 and initTopoParms() (inlined in cpu_thread_alloc) divides by zero (#DE).
-# OpenCore rewrites the MSR code before the user patches run, so fix the readers instead: cpu_thread_alloc sees 8 cores, 16 threads.
-for find, repl, count in (("8b9890010000", "bb0800000090", 1),            # mov ebx,[rax+400]  -> mov ebx,8
-                          ("8bb094010000", "be1000000090", 1),            # mov esi,[rax+404]  -> mov esi,16
-                          ("418b8f90010000", "b9080000009090", 2),        # mov ecx,[r15+400]  -> mov ecx,8
-                          ("418b8794010000", "b8100000009090", 1),        # mov eax,[r15+404]  -> mov eax,16
-                          # belt and braces: xor edx,edx / div reg  ->  xor eax,eax / mov al,N, so no division can fault
-                          ("31d2f7f3", "31c0b002", 1),                    # div ebx (threads per core) -> 2
-                          ("31d2f7f7", "31c0b008", 1),                    # div edi (cores sharing the LLC) -> 8
-                          ("31d2f7f1", "31c0b002", 1)):                   # div ecx (threads per core) -> 2
+# AMD CPUs do not report Intel-style topology (CPUID leaf 4, MSR 0x35): cores_per_package falls back to 1, cache_sharing to 1
+# while logical_per_package is 16, and initTopoParms()/x86_LLC_info() (inlined in cpu_thread_alloc, xnu cpu_threads.c) end up
+# dividing by zero. Replace each quotient by the Zen 2 value (8 cores / 16 threads, 2 CCX of 4 cores sharing an L3):
+#   xor edx,edx ; div reg   ->   xor eax,eax ; mov al,N      (context bytes keep every patch on its own site)
+TOPO = (("89f031d2f7f3", "2"),               # nLThreadsPerCore helper: thread_count / core_count
+        ("89c789c831d2f7f7", "4"),           # nCoresSharingLLC = cache_sharing / (threads per core)
+        ("418b879401000031d2f7f1", "2"),     # nLThreadsPerCore = thread_count / core_count
+        ("418b87cc00000031d2f7f1", "2"),     # nPThreadsPerCore = logical_per_package / cores_per_package
+        ("418b879001000031d2f7f6", "2"),     # nLDiesPerPackage = core_count / nCoresSharingLLC
+        ("418bb7c800000031d2f7f1", "4"),     # nPCoresPerDie = maxSharingLLC / nPThreadsPerCore (the one that panicked)
+        ("89c789f031d2f7f7", "2"))           # nPDiesPerPackage = cores_per_package / nPCoresPerDie
+for find, n in TOPO:
+    repl = find[:-8] + "31c0b0" + "%02x" % int(n)
     cfg["Kernel"]["Patch"].insert(0, {
-        "Arch": "x86_64", "Base": "_cpu_thread_alloc", "Comment": "ps5 - topology counts " + find[:8], "Count": count,
+        "Arch": "x86_64", "Base": "_cpu_thread_alloc", "Comment": "ps5 - topology div " + find[:8], "Count": 1,
         "Enabled": True, "Find": bytes.fromhex(find), "Identifier": "kernel", "Limit": 0x400, "Mask": b"",
         "MaxKernel": "21.99.99", "MinKernel": "21.0.0", "Replace": bytes.fromhex(repl), "ReplaceMask": b"", "Skip": 0})
 cfg["Misc"]["Boot"]["Timeout"] = 0
