@@ -100,5 +100,9 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
         Line[15] = '0' + (n / 100) % 10; Line[16] = '0' + (n / 10) % 10; Line[17] = '0' + n % 10;
         for (UINTN i = 0; Line[i]; i++) Putc((UINT8)Line[i]);
     }
+    {   /* the panic window: from "panic(" on, the text goes to the right half */
+        char Pan[] = "panic(cpu 0 caller 0xfffff): test of the panic window\nBacktrace line 1\nBacktrace line 2\nlast line\n";
+        for (UINTN i = 0; Pan[i]; i++) Putc((UINT8)Pan[i]);
+    }
     for (;;) { }
 }
