@@ -374,6 +374,15 @@ static void stage5_launch(u64 bp)
     DP(" ppr "); put_hex(lapic[0xA0 / 4], 8); DP("\n");
     cx = save_cx; cy = save_cy;
     puts_(" after "); put_hex(lapic[0xF0 / 4], 8); puts_("  id "); put_hex(lapic[0x20 / 4], 8); puts_("\n");
+    /* The AMD IOMMU (MMIO 0xFDD80000, Control Register at +0x18) is still enabled in passthrough mode with its device table in
+     * Linux's RAM, which UEFI and macOS reuse: devices would DMA through garbage (NVMe identify data came back zero, the xHCI
+     * could not find its disk). Switch it, and with it interrupt remapping, off. */
+    {
+        volatile u64 *iommu_ctl = (volatile u64 *)(0xFDD80000ULL + 0x18);
+        u64 before = *iommu_ctl;
+        *iommu_ctl = 0;
+        puts_("IOMMU control "); put_hex(before, 16); puts_(" -> "); put_hex(*iommu_ctl, 16); puts_("\n");
+    }
     puts_("\njumping to the UEFI payload...\n");
     __asm__ volatile("wbinvd" ::: "memory");
     *(volatile u64 *)(rsp - 8) = 0;                  /* fake return address, rsp ends up 8 mod 16 as after a call */
