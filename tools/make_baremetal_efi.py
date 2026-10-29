@@ -12,6 +12,7 @@ import os, plistlib, shutil, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
 SRC = ROOT / "build/opencore/EFI"
 OUT = ROOT / "build/baremetal-efi/EFI"
 
@@ -101,6 +102,21 @@ cfg["Kernel"]["Patch"].insert(0, {
     "Find": bytes.fromhex("448b75b84585f60f8405010000"), "Identifier": "kernel", "Limit": 0x1000, "Mask": b"",
     "MaxKernel": "21.99.99", "MinKernel": "21.0.0", "Replace": bytes.fromhex("41be4000000090909090909090"),
     "ReplaceMask": b"", "Skip": 0})
+# ACPI for the bare PS5 (see the VM rehearsal notes): our DSDT (PCI0 windows + an RTC node), and Sony's MADT plus a fake I/O APIC
+import make_madt
+shutil.copy(ROOT / "opencore/ACPI/DSDT-PS5-v2.aml", OUT / "OC/ACPI/DSDT.aml")
+(OUT / "OC/ACPI/MADT-PS5.aml").write_bytes(make_madt.build())
+cfg["ACPI"]["Add"] = [{"Comment": "PS5 DSDT", "Enabled": True, "Path": "DSDT.aml"},
+                      {"Comment": "Sony MADT + fake I/O APIC", "Enabled": True, "Path": "MADT-PS5.aml"}]
+cfg["ACPI"]["Delete"] = [{"All": True, "Comment": "Sony MADT (no I/O APIC)", "Enabled": True, "OemTableId": b"",
+                          "TableLength": 0, "TableSignature": b"APIC"}]
+# the PS5 has no CMOS RTC: AppleRTC reads/writes are replaced by a fixed time (12:00 on 24 Oct 2026) and ignored writes
+rtc_read = bytes.fromhex("89f683fe0e730c488d0d080000000fb60431c331c0c3") + bytes.fromhex("0000000012000724102626020080")
+for sym, code, name in (("__ZN8AppleRTC7rtcReadEj", rtc_read, "rtcRead"), ("__ZN8AppleRTC8rtcWriteEjh", b"\xc3", "rtcWrite")):
+    cfg["Kernel"]["Patch"].insert(0, {
+        "Arch": "x86_64", "Base": sym, "Comment": "ps5 - AppleRTC " + name, "Count": 1, "Enabled": True, "Find": b"",
+        "Identifier": "com.apple.driver.AppleRTC", "Limit": len(code), "Mask": b"", "MaxKernel": "", "MinKernel": "",
+        "Replace": code, "ReplaceMask": b"", "Skip": 0})
 cfg["Misc"]["Boot"]["Timeout"] = 0
 cfg["Misc"]["Boot"]["ShowPicker"] = True
 cfg["Misc"]["Boot"]["HideAuxiliary"] = False

@@ -28,6 +28,7 @@ RESERVED_LO, RESERVED_HI = BASE, BASE + 0x00A00000    # reported as allocated (B
 # ---- PS5 facts ------------------------------------------------------------------------------------------------------
 FB_BASE, FB_PITCH, FB_W, FB_H = 0x46a000000, 10240, 2560, 1440
 RSDP = 0x7fd8e014
+IOAPIC_PAGE = 0x7fd70000                          # fake I/O APIC registers, inside the reserved 0x7f9d0000-0x80000000
 ECAM_BASE, ECAM_SIZE = 0xF0000000, 0x8000000      # e820 "reserved" window, to be confirmed with MSR C001_0058
 
 import os
@@ -212,7 +213,11 @@ def main():
     hobs = build_hobs(fvs)
     print(f"HOB list: {len(hobs):#x} bytes at {HOB_BASE:#x}")
 
-    segments = [(BASE, bytes(image))] + fvdata + [(HOB_BASE, hobs)]
+    # Fake I/O APIC (the console has none, XNU insists on one): a page inside Sony's already reserved ACPI region whose IOWIN
+    # word reads 0x00170011 (version 0x11, 24 pins) whatever register is selected. IOAPIC_PAGE is referenced by tools/make_madt.py.
+    ioapic = bytearray(0x1000)
+    struct.pack_into("<I", ioapic, 0x10, 0x00170011)
+    segments = [(BASE, bytes(image))] + fvdata + [(HOB_BASE, hobs), (IOAPIC_PAGE, bytes(ioapic))]
     hdr = struct.pack("<8sQQQQII", b"PS5BNDL1", BASE + entry, HOB_BASE, STACK_TOP - 0x40,
                       HOB_BASE + FB_PATCH_OFFSET, len(segments), 0)
     table_len = len(segments) * 24

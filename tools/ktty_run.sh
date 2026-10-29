@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 OC_DEBUG=1 KTTY=1 python3 tools/make_baremetal_efi.py | head -1
 (cd build/baremetal-efi && tar -cf ../baremetal-efi.tar EFI)
-scp -q build/baremetal-efi.tar bringup/tools/patch_tripwire.py bringup/tools/run_stage.sh root@192.168.1.200:/root/
+scp -q build/baremetal-efi.tar build/ps5-upl.bundle build/bringup/chainV5.bzImage bringup/tools/patch_tripwire.py bringup/tools/run_stage.sh root@192.168.1.200:/root/
 ssh root@192.168.1.200 'rm -rf /boot/efi/EFI; tar -C /boot/efi -xf /root/baremetal-efi.tar 2>/dev/null; sync
 for p in $(pgrep -x qemu-system-x86); do kill -9 $p; done; systemctl stop hackintosh --no-block; sleep 3
 for p in $(pgrep -x stop_qemu.sh); do kill -9 $p; done
