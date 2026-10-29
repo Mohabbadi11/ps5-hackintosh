@@ -51,7 +51,7 @@ static void glyph(u32 col, u32 row, u8 c)
         u8 bits = g[y];
         u32 base = KTTY_FB_OFF + (row * 16 + y) * PITCH + col * 32;
         for (u32 x = 0; x < 8; x++)
-            px(base + x * 4, (bits & (0x80 >> x)) ? FG : BG);
+            if (bits & (0x80 >> x)) px(base + x * 4, FG);          /* the cell is already black: only the lit pixels cost I/O */
     }
 }
 
