@@ -82,7 +82,11 @@ cfg["PlatformInfo"]["Memory"] = {
 for find, repl, count in (("8b9890010000", "bb0800000090", 1),            # mov ebx,[rax+400]  -> mov ebx,8
                           ("8bb094010000", "be1000000090", 1),            # mov esi,[rax+404]  -> mov esi,16
                           ("418b8f90010000", "b9080000009090", 2),        # mov ecx,[r15+400]  -> mov ecx,8
-                          ("418b8794010000", "b8100000009090", 1)):       # mov eax,[r15+404]  -> mov eax,16
+                          ("418b8794010000", "b8100000009090", 1),        # mov eax,[r15+404]  -> mov eax,16
+                          # belt and braces: xor edx,edx / div reg  ->  xor eax,eax / mov al,N, so no division can fault
+                          ("31d2f7f3", "31c0b002", 1),                    # div ebx (threads per core) -> 2
+                          ("31d2f7f7", "31c0b008", 1),                    # div edi (cores sharing the LLC) -> 8
+                          ("31d2f7f1", "31c0b002", 1)):                   # div ecx (threads per core) -> 2
     cfg["Kernel"]["Patch"].insert(0, {
         "Arch": "x86_64", "Base": "_cpu_thread_alloc", "Comment": "ps5 - topology counts " + find[:8], "Count": count,
         "Enabled": True, "Find": bytes.fromhex(find), "Identifier": "kernel", "Limit": 0x400, "Mask": b"",
