@@ -149,7 +149,8 @@ if os.environ.get("RETURN") == "1":
     cfg["Kernel"]["Patch"].insert(0, {
         "Arch": "x86_64", "Base": "_halt_all_cpus", "Comment": "ps5 - return to Linux", "Count": 1, "Enabled": True, "Find": b"",
         "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
-        "Replace": bytes.fromhex("fa" "48c7c000400600" "0f22d8" "48c7c000720600" "ffe0")   # cli; mov $0x64000,%rax; mov %rax,%cr3; mov $0x67200,%rax; jmp *%rax, "ReplaceMask": b"", "Skip": 0})
+        # cli; mov $0x64000,%rax; mov %rax,%cr3; mov $0x67200,%rax; jmp *%rax
+        "Replace": bytes.fromhex("fa" "48c7c000400600" "0f22d8" "48c7c000720600" "ffe0"), "ReplaceMask": b"", "Skip": 0})
 # KTTY=1: show the whole kernel console (printf/kprintf) on the screen, see bringup/ktty and tools/make_ktty.py
 if os.environ.get("KTTY") == "1":
     sys.path.insert(0, str(ROOT / "tools"))
