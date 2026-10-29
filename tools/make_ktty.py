@@ -4,7 +4,7 @@
   _serial_putc_options  -> blob: jmp main at +0x00 (serial_putc_options), jmp main at +0x70 (serial_putc, 0x70 further on in
                            the kernel), main + font from +0x80, overwriting the unused audit MAC checks that follow
 Prints nothing; imported by make_baremetal_efi.py (KTTY=1)."""
-import subprocess, tempfile
+import os, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,7 +17,8 @@ def build_blob():
         obj, elf, binf = f"{td}/k.o", f"{td}/k.elf", f"{td}/k.bin"
         subprocess.check_call([f"{LLVM}/clang", "-target", "x86_64-unknown-none-elf", "-ffreestanding", "-fno-stack-protector",
                                "-mno-red-zone", "-mno-sse", "-mno-mmx", "-mno-avx", "-fPIE", "-fno-builtin", "-Os",
-                               "-fvisibility=hidden", "-c", str(ROOT / "bringup/ktty/ktty.c"), "-o", obj])
+                               "-fvisibility=hidden"] + ([f'-DKTTY_RETURN_PAT="{os.environ["KTTY_RETURN"]}"'] if os.environ.get("KTTY_RETURN") else []) +
+                              ["-c", str(ROOT / "bringup/ktty/ktty.c"), "-o", obj])
         Path(f"{td}/l.ld").write_text("ENTRY(ktty_main)\nSECTIONS { . = 0; .text : { *(.text.entry) *(.text .text.*) } "
                                       ".rodata : { *(.rodata .rodata.*) } /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) } }\n")
         subprocess.check_call([f"{LLVM}/ld.lld", "-nostdlib", "-static", "-T", f"{td}/l.ld", obj, "-o", elf])

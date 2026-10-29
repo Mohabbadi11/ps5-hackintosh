@@ -59,6 +59,9 @@ __attribute__((section(".text.entry"), used))
 void ktty_main(u8 c)
 {
     static const u8 pat[6] = { 'p', 'a', 'n', 'i', 'c', '(' };
+#ifdef KTTY_RETURN_PAT
+    static const char rpat[] = KTTY_RETURN_PAT;
+#endif
     const u32 state_off = KTTY_FB_OFF + 1439u * PITCH;
     out32(0x2000, state_off | 0x80000000u);
     u32 st = in32(0x2004);
@@ -67,6 +70,18 @@ void ktty_main(u8 c)
         st = 0x5A000000u;
         bar(0, BAR);
     }
+#ifdef KTTY_RETURN_PAT
+    /* Return to Linux (bringup/retlinux) as soon as the kernel has printed KTTY_RETURN_PAT: the matcher's index lives in the
+     * pixel next to the cursor state. The tail is the kernel-side half of the return: our tables, then the low-memory stub. */
+    out32(0x2000, (state_off + 4) | 0x80000000u);
+    u32 rst = in32(0x2004);
+    u32 ridx = ((rst >> 24) == 0xA5u) ? (rst & 0xFF) : 0;
+    if (c == (u8)rpat[ridx]) ridx++; else ridx = (c == (u8)rpat[0]) ? 1 : 0;
+    out32(0x2000, (state_off + 4) | 0x80000000u);
+    out32(0x2004, 0xA5000000u | ridx);
+    if (ridx == sizeof(rpat) - 1)
+        __asm__ volatile("cli; mov $0x64000, %%rax; mov %%rax, %%cr3; mov $0x67200, %%rax; jmp *%%rax" ::: "rax");
+#endif
     u32 col = st & 0x1FF, row = (st >> 9) & 0x7F, wrapped = (st >> 16) & 1, pmode = (st >> 17) & 1, midx = (st >> 18) & 7;
 
     if (!pmode) {                                       /* watch for "panic(": from there on write into the right half */

@@ -143,6 +143,13 @@ if os.environ.get("TRIPWIRE"):
         "Arch": "x86_64", "Base": sym, "Comment": f"tripwire {sym}", "Count": 1, "Enabled": True, "Find": b"",
         "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
         "Replace": code, "ReplaceMask": b"", "Skip": 0})
+# RETURN=1: a panic/reboot (kernel halt_all_cpus) jumps back into the Linux crash kernel instead of resetting the console: Linux
+# comes back with all of macOS' RAM readable (tools/macos_log.py). KTTY_RETURN="text" does the same when the console prints it.
+if os.environ.get("RETURN") == "1":
+    cfg["Kernel"]["Patch"].insert(0, {
+        "Arch": "x86_64", "Base": "_halt_all_cpus", "Comment": "ps5 - return to Linux", "Count": 1, "Enabled": True, "Find": b"",
+        "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
+        "Replace": bytes.fromhex("fa" "48c7c000400600" "0f22d8" "48c7c000720600" "ffe0")   # cli; mov $0x64000,%rax; mov %rax,%cr3; mov $0x67200,%rax; jmp *%rax, "ReplaceMask": b"", "Skip": 0})
 # KTTY=1: show the whole kernel console (printf/kprintf) on the screen, see bringup/ktty and tools/make_ktty.py
 if os.environ.get("KTTY") == "1":
     sys.path.insert(0, str(ROOT / "tools"))
@@ -152,7 +159,7 @@ if os.environ.get("KTTY") == "1":
     # slto_us: the console paints each character through I/O ports (slow) with kernel locks held; the default 0.1 s ticket-lock
     # watchdog would panic ("Ticket spinlock ... timeout")
     cfg["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"]["boot-args"] = (
-        args if "serial=" in args else args + " serial=3") + " slto_us=10000000" + (" cpus=" + os.environ["CPUS"] if os.environ.get("CPUS") else "") + (" io=" + os.environ["IOLOG"] if os.environ.get("IOLOG") else "")
+        args if "serial=" in args else args + " serial=3") + " slto_us=10000000 msgbuf=2097152" + (" cpus=" + os.environ["CPUS"] if os.environ.get("CPUS") else "") + (" io=" + os.environ["IOLOG"] if os.environ.get("IOLOG") else "")
 plistlib.dump(cfg, open(OUT / "OC/config.plist", "wb"))
 print("EFI written to", OUT)
 for p in sorted(OUT.rglob("*")):

@@ -18,10 +18,19 @@ mkdir -p "$OUT"
 CFLAGS="-target x86_64-unknown-none-elf -ffreestanding -fno-stack-protector -mno-red-zone -mno-sse -mno-mmx -mno-avx \
         -fPIE -fvisibility=hidden -fno-builtin -O2"
 "$L/clang" -target x86_64-unknown-none-elf -c "$HERE/entry.S" -o "$OUT/entry.o"
+# the low-memory "return to Linux" stub (linked at its fixed physical address) as a C array for stub.c
+"$L/clang" -target x86_64-unknown-none-elf -c "$HERE/retlinux/retlow.S" -o "$OUT/retlow.o"
+"$L/ld.lld" -nostdlib -static -e rl_start -Ttext=0x67200 "$OUT/retlow.o" -o "$OUT/retlow.elf"
+"$L/llvm-objcopy" -O binary --only-section=.text "$OUT/retlow.elf" "$OUT/retlow.bin"
+python3 - "$OUT/retlow.bin" "$OUT/retlow.h" <<'PY'
+import sys
+d = open(sys.argv[1], "rb").read()
+open(sys.argv[2], "w").write("static const unsigned char retlow_code[%d] = {%s};\n" % (len(d), ",".join("0x%02x" % x for x in d)))
+PY
 
 build() {  # name defines...
     local name="$1"; shift
-    "$L/clang" $CFLAGS -I"$HERE" "$@" -c "$HERE/stub.c" -o "$OUT/stub$name.o"
+    "$L/clang" $CFLAGS -I"$HERE" -I"$OUT" "$@" -c "$HERE/stub.c" -o "$OUT/stub$name.o"
     "$L/ld.lld" -nostdlib -static -T "$HERE/link.ld" "$OUT/entry.o" "$OUT/stub$name.o" -o "$OUT/stub$name.elf"
     "$L/llvm-objcopy" -O binary --only-section=.pad --only-section=.text --only-section=.rodata --only-section=.data \
         "$OUT/stub$name.elf" "$OUT/stub$name.bin"
