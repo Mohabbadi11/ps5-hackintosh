@@ -152,7 +152,7 @@ if os.environ.get("KTTY") == "1":
     # slto_us: the console paints each character through I/O ports (slow) with kernel locks held; the default 0.1 s ticket-lock
     # watchdog would panic ("Ticket spinlock ... timeout")
     cfg["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"]["boot-args"] = (
-        args if "serial=" in args else args + " serial=3") + " slto_us=10000000"
+        args if "serial=" in args else args + " serial=3") + " slto_us=10000000" + (" cpus=" + os.environ["CPUS"] if os.environ.get("CPUS") else "")
 plistlib.dump(cfg, open(OUT / "OC/config.plist", "wb"))
 print("EFI written to", OUT)
 for p in sorted(OUT.rglob("*")):
