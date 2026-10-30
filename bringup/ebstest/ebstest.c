@@ -18,6 +18,49 @@ static void Square(UINTN idx, UINT32 colour)
             Fb[(y + 20) * Pitch + idx * 80 + x + 20] = colour;
 }
 
+
+static void ResultSquare(UINTN idx, UINT32 colour)
+{
+    for (UINTN y = 0; y < 64; y++)
+        for (UINTN x = 0; x < 64; x++)
+            Fb[(y + 1250) * Pitch + idx * 80 + x + 1900] = colour;
+}
+
+/* Does the CPU take interrupts after ExitBootServices? Own IDT (every vector -> Isr), LAPIC at its physical address (identity mapped). */
+static volatile UINT32 IsrCount;
+__asm__(".text\n.globl Isr\nIsr:\n"
+        "  pushq %rax\n  pushq %rcx\n"
+        "  movabsq $0xFEE000B0, %rax\n  movl $0, (%rax)\n"            /* EOI */
+        "  lock incl IsrCount(%rip)\n"
+        "  popq %rcx\n  popq %rax\n  iretq\n");
+extern char Isr[];
+static UINT8 IdtTab[256 * 16] __attribute__((aligned(16)));
+
+static UINT32 IntrTest(int timer)
+{
+    volatile UINT32 *L = (volatile UINT32 *)0xFEE00000ULL;
+    UINT16 Cs; __asm__ volatile("mov %%cs, %0" : "=r"(Cs));
+    UINT64 H = (UINT64)(UINTN)Isr;
+    for (int v = 0; v < 256; v++) {
+        UINT8 *g = IdtTab + v * 16;
+        *(UINT16 *)(g + 0) = (UINT16)H; *(UINT16 *)(g + 2) = Cs; g[4] = 0; g[5] = 0x8E;
+        *(UINT16 *)(g + 6) = (UINT16)(H >> 16); *(UINT32 *)(g + 8) = (UINT32)(H >> 32); *(UINT32 *)(g + 12) = 0;
+    }
+    struct { UINT16 limit; UINT64 base; } __attribute__((packed)) Idt = { sizeof(IdtTab) - 1, (UINT64)(UINTN)IdtTab }, Old;
+    __asm__ volatile("sidt %0" : "=m"(Old));
+    __asm__ volatile("lidt %0" :: "m"(Idt));
+    L[0xF0 / 4] = 0x1FF;                      /* software enable, spurious 0xFF */
+    L[0x80 / 4] = 0;                          /* TPR 0 */
+    IsrCount = 0;
+    if (timer) { L[0x3E0 / 4] = 0xB; L[0x320 / 4] = 0x51; L[0x380 / 4] = 100000; }     /* one-shot, vector 0x51 */
+    else { L[0x310 / 4] = 0; L[0x300 / 4] = 0x000440 | 0x50; }                              /* self-IPI vector 0x50 */
+    __asm__ volatile("sti");
+    for (volatile UINT32 i = 0; i < 50000000; i++) { }
+    __asm__ volatile("cli");
+    __asm__ volatile("lidt %0" :: "m"(Old));
+    return IsrCount;
+}
+
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
 {
     EFI_GUID GopGuid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
@@ -66,6 +109,9 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE Image, EFI_SYSTEM_TABLE *St)
     Status = St->RuntimeServices->GetTime(&Time, NULL);
     Square(4, Status == EFI_SUCCESS ? 0xFFFF00FF : 0xFFFF0000);
     Square(5, 0xFF0000FF);
+    /* results far from everything the ktty test below draws: bottom right, 80 pixels apart: self-IPI taken?, LAPIC timer taken? (green/red) */
+    ResultSquare(0, IntrTest(0) ? 0xFF00FF00 : 0xFFFF0000);
+    ResultSquare(1, IntrTest(1) ? 0xFF00FF00 : 0xFFFF0000);
 
     for (UINT32 n = 0; n < 16; n++) {
         for (volatile UINT32 i = 0; i < 20000000; i++) { }
