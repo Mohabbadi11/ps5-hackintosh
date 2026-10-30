@@ -100,26 +100,21 @@ static void window(const char *tag)
     dump_lapic(" ->");
 }
 
-/* the kernel's _lapic_interrupt tripwire (red square) hangs if the core takes an interrupt: the last label names the step */
+/* Which vectors does the core take? A taken vector leaves IRR (the dump shows irr6/7 after each window); the 0xDD timer bit
+ * has been pending for a long time. IER is dumped in the state the kernel leaves it. */
+static void ipi(u8 v) { volatile u32 *l = lapic_base(); l[0x310 / 4] = 0; l[0x300 / 4] = 0x00044000u | v; }
+
 static void lapic_probe(void)
 {
     volatile u32 *l = lapic_base();
-    kputs("\nPROBE\n");
-    window("A (iere off)");
-    u64 efer = rdmsr64(0xC0000080);
-    wrmsr64(0xC0000080, efer | (1u << 12)); __asm__ volatile("stgi"); wrmsr64(0xC0000080, efer);
-    window("S1 stgi");
-    l[0x350 / 4] |= 0x10000; outb(0x21, 0xFF); outb(0xA1, 0xFF);
-    window("S2 lint0+pic masked");
-    l[0xF0 / 4] = 0x0DA; l[0xF0 / 4] = 0x1DA; l[0xB0 / 4] = 0;
-    l[0x310 / 4] = 0; l[0x300 / 4] = 0x000440DEu;
-    window("S3 svr cycled, ipi");
+    kputs("\nPROBE ext "); khex(l[0x400 / 4], 8); kch(' '); khex(l[0x410 / 4], 8); kch('\n');
+    ipi(0xC0); window("V1 ipi C0");
+    ipi(0xEC); window("V2 ipi EC");
+    ipi(0xFD); window("V3 ipi FD");
     l[0x410 / 4] = 1;
     for (int i = 0; i < 8; i++) l[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
-    window("B iere on, ier ones");
-    kputs("S4 hlt\n");
-    __asm__ volatile("sti; hlt; cli");
-    kputs("S4 woke\n");
+    l[0x80 / 4] = 0; l[0xB0 / 4] = 0;
+    ipi(0xDE); window("B ier ones, tpr, eoi, ipi DE");
 }
 #endif
 
@@ -127,14 +122,6 @@ __attribute__((section(".text.entry"), used))
 void ktty_main(u8 c)
 {
     const u32 state_off = KTTY_FB_OFF + 1439u * PITCH;
-    /* The LAPIC comes up with AMD's interrupt-enable registers switched on (IERE, 0x410 bit 0) and only a few vectors allowed (IER6
-     * was 0x1f: the kernel's timer vector 0xDD never reached the core, nor did any IPI). XNU does not know these registers: make
-     * every vector pass again as soon as the kernel has mapped the LAPIC. */
-    volatile u32 *lap = lapic_base();
-    if ((u64)lap >= 0xffffff0000000000ull && (lap[0x410 / 4] & 1)) {
-        lap[0x410 / 4] = 0;
-        for (int i = 0; i < 8; i++) lap[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
-    }
 #if defined(KTTY_RETURN_PAT) || defined(KTTY_DUMP_PAT)
     out32(0x2000, state_off | 0x80000000u);
     if ((in32(0x2004) >> 24) == 0x5A) {                 /* the screen is initialised: the matchers' state is valid */
