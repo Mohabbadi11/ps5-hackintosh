@@ -39,6 +39,19 @@ for addr, t in panics:
     if t[:80] in seen: continue
     seen.add(t[:80])
     out.append(f"===== panic text at phys {addr:#x} =====\n" + t.decode("latin-1"))
+# LAPIC snapshot taken by the return stub (bringup/retlinux/retlow.S) at 0x300000800
+snap = os.pread(fd, 0x500, 0x300000800)
+rflags = struct.unpack_from("<Q", snap, 0)[0]
+reg = lambda off: struct.unpack_from("<I", snap, 0x100 + off)[0]
+if rflags or reg(0xF0):
+    isr = " ".join(f"{reg(0x100 + 16 * i):08x}" for i in range(8))
+    irr = " ".join(f"{reg(0x200 + 16 * i):08x}" for i in range(8))
+    out.append("===== LAPIC / RFLAGS at the moment of the return =====\n"
+               f"RFLAGS {rflags:#x}  (IF={(rflags >> 9) & 1})\n"
+               f"ID {reg(0x20):#x}  VER {reg(0x30):#x}  TPR {reg(0x80):#x}  PPR {reg(0xA0):#x}  SVR {reg(0xF0):#x}  ESR {reg(0x280):#x}\n"
+               f"LVT timer {reg(0x320):#x}  thermal {reg(0x330):#x}  perf {reg(0x340):#x}  LINT0 {reg(0x350):#x}  LINT1 {reg(0x360):#x}  err {reg(0x370):#x}\n"
+               f"timer initial {reg(0x380):#x}  current {reg(0x390):#x}  divide {reg(0x3E0):#x}\n"
+               f"ISR (255..0) {isr}\nIRR (255..0) {irr}")
 path = sys.argv[1] if len(sys.argv) > 1 else "/root/macos-log.txt"
 open(path, "w").write("\n\n".join(out))
 print(f"{len(found)} msgbuf(s), {len(seen)} panic text(s) -> {path}")

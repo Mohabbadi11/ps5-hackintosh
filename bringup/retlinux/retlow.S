@@ -25,7 +25,16 @@ rl_next:
     xorl    %eax, %eax
     movw    %ax, %fs
     movw    %ax, %gs
-    movl    $0xFEE00000, %r8d             /* local APIC: mask its timer, software-disable it (Linux brings it back up) */
+    movl    $0xFEE00000, %r8d             /* local APIC (xAPIC MMIO) */
+    movabsq $0x300000800, %rdi            /* snapshot for tools/macos_log.py, in the marks page Linux can read: +0 RFLAGS, +0x100 LAPIC */
+    movq    %r15, (%rdi)
+    xorl    %ecx, %ecx
+1:  movl    (%r8,%rcx), %eax
+    movl    %eax, 0x100(%rdi,%rcx)
+    addl    $16, %ecx
+    cmpl    $0x400, %ecx
+    jb      1b
+    /* ...then quiet it: mask its timer, software-disable it (Linux brings it back up) */
     movl    $0x10000, 0x320(%r8)
     movl    $0x000000FF, 0xF0(%r8)
     movq    0x63018, %rsi

@@ -5,6 +5,9 @@
 #include "paint.inc"
     .globl rk_start, rk_end
 rk_start:
+    pushfq
+    popq    %rax
+    movq    %rax, %r15                   /* RFLAGS at the moment of the trigger, saved for the dump */
     cli
     PAINT 0xFFFF0000, 2100, $0xDEADF00D          /* red: the return path was entered */
     movq    $0x64000, %rax
