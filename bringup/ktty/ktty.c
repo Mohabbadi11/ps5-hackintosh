@@ -89,11 +89,41 @@ static void dump_lapic(const char *tag)
     kputs(" irr6/7 "); khex(l[0x260 / 4], 8); kch(' '); khex(l[0x270 / 4], 8); kch('\n');
 }
 
+static void window(const char *tag)
+{
+    volatile u32 *l = lapic_base();
+    kputs(tag); kputs(" 410 "); khex(l[0x410 / 4], 2); kputs(" ier "); for (int i = 7; i >= 0; i--) { khex(l[(0x480 + 16 * i) / 4], 8); kch(' '); }
+    kch('\n');
+    __asm__ volatile("sti");
+    for (volatile u64 i = 0; i < 100000000ull; i++) { }
+    __asm__ volatile("cli");
+    dump_lapic(" ->");
+}
+
+static inline u8 inb(u16 p) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(p)); return v; }
+static inline void outb(u16 p, u8 v) { __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(p)); }
+static inline void wrmsr64(u32 msr, u64 v) { __asm__ volatile("wrmsr" :: "c"(msr), "a"((u32)v), "d"((u32)(v >> 32))); }
+
+/* the kernel's _lapic_interrupt tripwire (red square) hangs if the core takes an interrupt: the last label names the step */
 static void lapic_probe(void)
 {
     volatile u32 *l = lapic_base();
-    kputs("\nPROBE ext "); khex(l[0x400 / 4], 8); kch(' '); khex(l[0x410 / 4], 8); kch(' '); khex(l[0x4E0 / 4], 8);
-    kch('\n'); dump_lapic("now");
+    kputs("\nPROBE\n");
+    window("A (iere off)");
+    u64 efer = rdmsr64(0xC0000080);
+    wrmsr64(0xC0000080, efer | (1u << 12)); __asm__ volatile("stgi"); wrmsr64(0xC0000080, efer);
+    window("S1 stgi");
+    l[0x350 / 4] |= 0x10000; outb(0x21, 0xFF); outb(0xA1, 0xFF);
+    window("S2 lint0+pic masked");
+    l[0xF0 / 4] = 0x0DA; l[0xF0 / 4] = 0x1DA; l[0xB0 / 4] = 0;
+    l[0x310 / 4] = 0; l[0x300 / 4] = 0x000440DEu;
+    window("S3 svr cycled, ipi");
+    l[0x410 / 4] = 1;
+    for (int i = 0; i < 8; i++) l[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
+    window("B iere on, ier ones");
+    kputs("S4 hlt\n");
+    __asm__ volatile("sti; hlt; cli");
+    kputs("S4 woke\n");
 }
 #endif
 
