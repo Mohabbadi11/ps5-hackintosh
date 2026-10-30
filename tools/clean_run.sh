@@ -1,8 +1,13 @@
 #!/bin/bash
 # Deploys the normal (quiet) EFI: no kernel console blob, no verbose text over the picture. The kernel patches (TSC, APIC IER) and the
 # framebuffer-in-BAR0 stage are the same as in ktty_run.sh. Pick Macintosh HD in the picker; the desktop appears on the screen.
+#
+# Default = the NEW version: cpus=2 and AppleNVMe disabled (never touch the internal SSD). The known-good build of 2026-10-30 (stable desktop,
+# one CPU, no NVMe block) is:   NVMEBLOCK=0 CPUS=1 tools/clean_run.sh
+# Try more cores step by step: CPUS=2, then 4, 8, 16. Needs Linux up (jailbreak first); then pick "2. Macintosh HD" in the picker.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+export CPUS="${CPUS:-2}"
 QUIET=1 OC_DEBUG=1 python3 tools/make_baremetal_efi.py | head -1
 (cd build/baremetal-efi && tar -cf ../baremetal-efi.tar EFI)
 scp -q build/baremetal-efi.tar build/ps5-upl.bundle build/bringup/chainV5.bzImage bringup/tools/patch_tripwire.py bringup/tools/run_stage.sh bringup/tools/kms_linear.py root@192.168.1.200:/root/
