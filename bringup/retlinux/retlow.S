@@ -17,7 +17,7 @@ rl_start:
     movl    $0x20, %eax                   /* CR4 = PAE only: drops SMEP/SMAP/PCID/PGE the kernel had enabled */
     movq    %rax, %cr4
     PAINT 0xFFFF00FF, 2400, 0x63000                /* magenta: CR4 written */
-    rex64 ljmp *0x67110                   /* reload CS with our 64-bit code segment */
+    ljmpl   *0x67110                      /* reload CS: m16:32 (AMD ignores REX.W here): 32-bit offset, then the selector */
 rl_next:
     PAINT 0xFF00FF00, 2480, 0x63000                /* green: CS reloaded with our GDT */
     movw    $0x10, %ax
