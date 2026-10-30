@@ -100,21 +100,16 @@ static void window(const char *tag)
     dump_lapic(" ->");
 }
 
-/* Which vectors does the core take? A taken vector leaves IRR (the dump shows irr6/7 after each window); the 0xDD timer bit
- * has been pending for a long time. IER is dumped in the state the kernel leaves it. */
-static void ipi(u8 v) { volatile u32 *l = lapic_base(); l[0x310 / 4] = 0; l[0x300 / 4] = 0x00044000u | v; }
-
+/* Report what the early fix in ktty_main left, then redo the repair that unblocked the boot (IERE on, every IER bit on, TPR 0, EOI). */
 static void lapic_probe(void)
 {
     volatile u32 *l = lapic_base();
-    kputs("\nPROBE ext "); khex(l[0x400 / 4], 8); kch(' '); khex(l[0x410 / 4], 8); kch('\n');
-    ipi(0xC0); window("V1 ipi C0");
-    ipi(0xEC); window("V2 ipi EC");
-    ipi(0xFD); window("V3 ipi FD");
+    kputs("\nPROBE iere "); khex(l[0x410 / 4], 8); kputs(" ier6 "); khex(l[0x4E0 / 4], 8); kputs(" ier7 "); khex(l[0x4F0 / 4], 8); kch('\n');
+    dump_lapic("before");
     l[0x410 / 4] = 1;
     for (int i = 0; i < 8; i++) l[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
     l[0x80 / 4] = 0; l[0xB0 / 4] = 0;
-    ipi(0xDE); window("B ier ones, tpr, eoi, ipi DE");
+    kputs("ier6 now "); khex(l[0x4E0 / 4], 8); kch('\n');
 }
 #endif
 
