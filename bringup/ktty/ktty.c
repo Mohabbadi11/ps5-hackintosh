@@ -68,11 +68,16 @@ static inline u64 rdmsr64(u32 msr) { u32 lo, hi; __asm__ volatile("rdmsr" : "=a"
 
 /* What does the LAPIC look like, and does the CPU take interrupts at all? The kernel's LAPIC base lives in a kernel variable whose
  * distance from this routine is known at build time (KTTY_LAPIC_DELTA); registers are read the way the kernel does it (base + reg). */
-static void dump_lapic(const char *tag)
+static volatile u32 *lapic_base(void)
 {
     volatile u64 *pv;
     __asm__ volatile("lea ktty_main(%%rip), %0\n\tadd %1, %0" : "=&r"(pv) : "er"((long)KTTY_LAPIC_DELTA));
-    volatile u32 *l = (volatile u32 *)*pv;
+    return (volatile u32 *)*pv;
+}
+
+static void dump_lapic(const char *tag)
+{
+    volatile u32 *l = lapic_base();
     u64 rfl; __asm__ volatile("pushfq; pop %0" : "=r"(rfl));
     struct { u16 limit; u64 base; } __attribute__((packed)) idt;
     __asm__ volatile("sidt %0" : "=m"(idt));
@@ -122,15 +127,15 @@ static void lapic_probe(void)
     for (volatile u64 i = 0; i < 400000000ull; i++) { }
     __asm__ volatile("cli");
     dump_lapic("after sti");
-    if (rdmsr64(0xC0000080) & (1u << 12)) {                 /* SVM on: the global interrupt flag might be clear */
-        __asm__ volatile("stgi; sti");
-        for (volatile u64 i = 0; i < 400000000ull; i++) { }
-        __asm__ volatile("cli");
-        dump_lapic("after stgi");
-    }
-    kputs("int 0xDD\n");
-    __asm__ volatile("int $0xDD");
-    kputs("ret\n");
+    /* int 0xDD already reached _lapic_interrupt: the IDT is fine. Does the core take a self-IPI the LAPIC delivers? */
+    volatile u32 *l = lapic_base();
+    kputs("ipi 0xDE\n");
+    l[0x310 / 4] = 0;
+    l[0x300 / 4] = 0x000440DEu;
+    __asm__ volatile("sti");
+    for (volatile u64 i = 0; i < 400000000ull; i++) { }
+    __asm__ volatile("cli");
+    dump_lapic("after ipi");
 }
 #endif
 
