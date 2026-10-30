@@ -117,6 +117,13 @@ for sym, code, name in (("__ZN8AppleRTC7rtcReadEj", rtc_read, "rtcRead"), ("__ZN
         "Arch": "x86_64", "Base": sym, "Comment": "ps5 - AppleRTC " + name, "Count": 1, "Enabled": True, "Find": b"",
         "Identifier": "com.apple.driver.AppleRTC", "Limit": len(code), "Mask": b"", "MaxKernel": "", "MinKernel": "",
         "Replace": code, "ReplaceMask": b"", "Skip": 0})
+# XNU's built-in Intel power management (XCPM) switches on for CPU model 0x47 (family 17h model 0x47 is a supported case in
+# xcpm_bootstrap) whatever the vendor: machine_idle then uses XCPM's MWAIT idle and timer deadlines instead of sti;hlt, which is a
+# prime suspect for the console never receiving a LAPIC interrupt. DummyPowerManagement does not stop it. Make it a no-op (ret):
+cfg["Kernel"]["Patch"].insert(0, {
+    "Arch": "x86_64", "Base": "_xcpm_bootstrap", "Comment": "ps5 - no XCPM", "Count": 1, "Enabled": True, "Find": b"",
+    "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
+    "Replace": bytes.fromhex("c3"), "ReplaceMask": b"", "Skip": 0})
 cfg["Misc"]["Boot"]["Timeout"] = 0
 cfg["Misc"]["Boot"]["ShowPicker"] = True
 cfg["Misc"]["Boot"]["HideAuxiliary"] = False
