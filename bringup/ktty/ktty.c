@@ -10,6 +10,7 @@
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
+typedef unsigned long long u64;
 
 #include "ktty_font.h"
 
@@ -55,13 +56,88 @@ static void glyph(u32 col, u32 row, u8 c)
     }
 }
 
+static void kch(u8 c);
+
+#ifdef KTTY_DUMP_PAT
+static void kputs(const char *t) { while (*t) kch((u8)*t++); }
+static void khex(u64 v, int digits)
+{
+    for (int i = digits - 1; i >= 0; i--) kch((u8)"0123456789abcdef"[(v >> (i * 4)) & 0xF]);
+}
+static inline u64 rdmsr64(u32 msr) { u32 lo, hi; __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr)); return ((u64)hi << 32) | lo; }
+
+/* What does the LAPIC look like, and does the CPU take interrupts at all? The kernel's LAPIC base lives in a kernel variable whose
+ * distance from this routine is known at build time (KTTY_LAPIC_DELTA); registers are read the way the kernel does it (base + reg). */
+static void dump_lapic(const char *tag)
+{
+    volatile u64 *pv;
+    __asm__ volatile("lea ktty_main(%%rip), %0\n\tadd %1, %0" : "=&r"(pv) : "er"((long)KTTY_LAPIC_DELTA));
+    volatile u32 *l = (volatile u32 *)*pv;
+    u64 rfl; __asm__ volatile("pushfq; pop %0" : "=r"(rfl));
+    struct { u16 limit; u64 base; } __attribute__((packed)) idt;
+    __asm__ volatile("sidt %0" : "=m"(idt));
+    kputs("\nLAPIC "); kputs(tag); kputs(": base "); khex((u64)l, 16); kputs(" rflags "); khex(rfl, 4);
+    kputs(" apicbase "); khex(rdmsr64(0x1B), 8);
+    kputs("\n id "); khex(l[0x20 / 4], 8); kputs(" ver "); khex(l[0x30 / 4], 8); kputs(" tpr "); khex(l[0x80 / 4], 4);
+    kputs(" ppr "); khex(l[0xA0 / 4], 4); kputs(" svr "); khex(l[0xF0 / 4], 4); kputs(" esr "); khex(l[0x280 / 4], 4);
+    kputs("\n lvt timer "); khex(l[0x320 / 4], 8); kputs(" lint0 "); khex(l[0x350 / 4], 8); kputs(" lint1 "); khex(l[0x360 / 4], 8);
+    kputs(" err "); khex(l[0x370 / 4], 8);
+    kputs("\n timer init "); khex(l[0x380 / 4], 8); kputs(" cur "); khex(l[0x390 / 4], 8); kputs(" div "); khex(l[0x3E0 / 4], 4);
+    kputs("\n isr "); for (int i = 7; i >= 0; i--) { khex(l[(0x100 + 16 * i) / 4], 8); kch(' '); }
+    kputs("\n irr "); for (int i = 7; i >= 0; i--) { khex(l[(0x200 + 16 * i) / 4], 8); kch(' '); }
+    volatile u64 *g = (volatile u64 *)(idt.base + 0xDD * 16);
+    kputs("\n idt limit "); khex(idt.limit, 4); kputs(" base "); khex(idt.base, 16);
+    kputs("\n gate DD "); khex(g[0], 16); kch(' '); khex(g[1], 16); kch('\n');
+}
+
+static void lapic_probe(void)
+{
+    dump_lapic("before sti");
+    __asm__ volatile("sti");
+    for (volatile u64 i = 0; i < 400000000ull; i++) { }
+    __asm__ volatile("cli");
+    dump_lapic("after sti");
+}
+#endif
+
 __attribute__((section(".text.entry"), used))
 void ktty_main(u8 c)
 {
-    static const u8 pat[6] = { 'p', 'a', 'n', 'i', 'c', '(' };
+    const u32 state_off = KTTY_FB_OFF + 1439u * PITCH;
+#if defined(KTTY_RETURN_PAT) || defined(KTTY_DUMP_PAT)
+    out32(0x2000, state_off | 0x80000000u);
+    if ((in32(0x2004) >> 24) == 0x5A) {                 /* the screen is initialised: the matchers' state is valid */
 #ifdef KTTY_RETURN_PAT
-    static const char rpat[] = KTTY_RETURN_PAT;
+        static const char rpat[] = KTTY_RETURN_PAT;
+        out32(0x2000, (state_off + 4) | 0x80000000u);
+        u32 rst = in32(0x2004);
+        u32 ridx = ((rst >> 24) == 0xA5u) ? (rst & 0xFF) : 0;
+        if (c == (u8)rpat[ridx]) ridx++; else ridx = (c == (u8)rpat[0]) ? 1 : 0;
+        out32(0x2000, (state_off + 4) | 0x80000000u);
+        out32(0x2004, 0xA5000000u | ridx);
+        if (ridx == sizeof(rpat) - 1)
+            __asm__ volatile("lea ktty_main(%%rip), %%rax; add $%c0, %%rax; jmp *%%rax" :: "i"(KTTY_HALT_DELTA) : "rax");
 #endif
+#ifdef KTTY_DUMP_PAT
+        static const char dpat[] = KTTY_DUMP_PAT;
+        out32(0x2000, (state_off + 8) | 0x80000000u);
+        u32 dst = in32(0x2004);
+        u32 didx = ((dst >> 24) == 0xA5u) ? (dst & 0xFF) : 0;
+        if (c == (u8)dpat[didx]) didx++; else didx = (c == (u8)dpat[0]) ? 1 : 0;
+        int fire = (didx == sizeof(dpat) - 1);
+        if (fire) didx = 0x80;                          /* fire once */
+        out32(0x2000, (state_off + 8) | 0x80000000u);
+        out32(0x2004, 0xA5000000u | didx);
+        if (didx == 0x80 && fire) { kch(c); lapic_probe(); return; }
+#endif
+    }
+#endif
+    kch(c);
+}
+
+static void kch(u8 c)
+{
+    static const u8 pat[6] = { 'p', 'a', 'n', 'i', 'c', '(' };
     const u32 state_off = KTTY_FB_OFF + 1439u * PITCH;
     out32(0x2000, state_off | 0x80000000u);
     u32 st = in32(0x2004);
@@ -70,18 +146,6 @@ void ktty_main(u8 c)
         st = 0x5A000000u;
         bar(0, BAR);
     }
-#ifdef KTTY_RETURN_PAT
-    /* Return to Linux (bringup/retlinux) as soon as the kernel has printed KTTY_RETURN_PAT: the matcher's index lives in the
-     * pixel next to the cursor state. The tail is the kernel-side half of the return: our tables, then the low-memory stub. */
-    out32(0x2000, (state_off + 4) | 0x80000000u);
-    u32 rst = in32(0x2004);
-    u32 ridx = ((rst >> 24) == 0xA5u) ? (rst & 0xFF) : 0;
-    if (c == (u8)rpat[ridx]) ridx++; else ridx = (c == (u8)rpat[0]) ? 1 : 0;
-    out32(0x2000, (state_off + 4) | 0x80000000u);
-    out32(0x2004, 0xA5000000u | ridx);
-    if (ridx == sizeof(rpat) - 1)
-        __asm__ volatile("lea ktty_main(%%rip), %%rax; add $%c0, %%rax; jmp *%%rax" :: "i"(KTTY_HALT_DELTA) : "rax");   /* the patched _halt_all_cpus */
-#endif
     u32 col = st & 0x1FF, row = (st >> 9) & 0x7F, wrapped = (st >> 16) & 1, pmode = (st >> 17) & 1, midx = (st >> 18) & 7;
 
     if (!pmode) {                                       /* watch for "panic(": from there on write into the right half */

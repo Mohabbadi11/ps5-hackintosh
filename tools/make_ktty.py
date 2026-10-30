@@ -12,6 +12,13 @@ LLVM = "/opt/homebrew/opt/llvm@18/bin"
 PLACEHOLDER = bytes.fromhex("0df0adde")          # 0xDEADF00D little endian
 
 
+def _putc_options():
+    out = subprocess.run(["/usr/bin/nm", str(ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc")], capture_output=True, text=True).stdout
+    for l in out.splitlines():
+        p = l.split()
+        if len(p) == 3 and p[2] == "_serial_putc_options": return int(p[0], 16)
+
+
 def halt_delta():
     """Distance from ktty_main (blob + 0x80, patched at _serial_putc_options) to the patched _halt_all_cpus, from the Monterey KC."""
     # nm prints the kernel's symbols and then aborts on the first kext it cannot parse: keep what it printed
@@ -20,12 +27,16 @@ def halt_delta():
     return sym["_halt_all_cpus"] - (sym["_serial_putc_options"] + 0x80)
 
 
+LAPIC_VBASE = 0xffffff80012fc8a8        # the kernel variable holding the LAPIC's virtual base (legacy_read/legacy_write, Monterey 21.6.0)
+
+
 def build_blob():
     with tempfile.TemporaryDirectory() as td:
         obj, elf, binf = f"{td}/k.o", f"{td}/k.elf", f"{td}/k.bin"
         subprocess.check_call([f"{LLVM}/clang", "-target", "x86_64-unknown-none-elf", "-ffreestanding", "-fno-stack-protector",
                                "-mno-red-zone", "-mno-sse", "-mno-mmx", "-mno-avx", "-fPIE", "-fno-builtin", "-Os",
-                               "-fvisibility=hidden", f"-DKTTY_HALT_DELTA={halt_delta()}"] + ([f'-DKTTY_RETURN_PAT="{os.environ["KTTY_RETURN"]}"'] if os.environ.get("KTTY_RETURN") else []) +
+                               "-fvisibility=hidden", f"-DKTTY_HALT_DELTA={halt_delta()}", f"-DKTTY_LAPIC_DELTA={LAPIC_VBASE - (0xffffff80003b6990 * 0 + _putc_options() + 0x80)}"] + ([f'-DKTTY_RETURN_PAT="{os.environ["KTTY_RETURN"]}"'] if os.environ.get("KTTY_RETURN") else []) +
+                              ([f'-DKTTY_DUMP_PAT="{os.environ["KTTY_DUMP"]}"'] if os.environ.get("KTTY_DUMP") else []) +
                               ["-c", str(ROOT / "bringup/ktty/ktty.c"), "-o", obj])
         Path(f"{td}/l.ld").write_text("ENTRY(ktty_main)\nSECTIONS { . = 0; .text : { *(.text.entry) *(.text .text.*) } "
                                       ".rodata : { *(.rodata .rodata.*) } /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) } }\n")
@@ -36,7 +47,7 @@ def build_blob():
     blob[0:2] = bytes([0xEB, 0x7E])              # +0x00: jmp +0x7e -> 0x80
     blob[0x70:0x72] = bytes([0xEB, 0x0E])        # +0x70: jmp +0x0e -> 0x80
     blob += main
-    assert len(blob) <= 0xAA0, f"blob too big: {len(blob)}"   # up to mac_proc_check_getauid (all audit MAC checks, unused at boot)
+    assert len(blob) <= 0x1700, f"blob too big: {len(blob)}"   # up to mac_proc_check_getauid (all audit MAC checks, unused at boot)
     assert PLACEHOLDER in blob
     return bytes(blob)
 
