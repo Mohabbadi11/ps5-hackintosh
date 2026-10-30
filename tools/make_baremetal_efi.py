@@ -169,6 +169,17 @@ if os.environ.get("TSCFIX", "1") != "0":
     sys.path.insert(0, str(ROOT / "tools"))
     import make_tscfix
     cfg["Kernel"]["Patch"] = make_tscfix.patches() + cfg["Kernel"]["Patch"]
+# AMD's APIC interrupt-enable registers (tools/make_ierfix.py): without this no interrupt reaches the core. IERFIX=0 leaves them.
+if os.environ.get("IERFIX", "1") != "0":
+    sys.path.insert(0, str(ROOT / "tools"))
+    import make_ierfix
+    cfg["Kernel"]["Patch"] = make_ierfix.patches() + cfg["Kernel"]["Patch"]
+# QUIET=1 (no KTTY): the normal boot. -v stays (XNU's own console shows the boot text until WindowServer takes the screen), the serial probe goes.
+if os.environ.get("QUIET") == "1":
+    k = "7C436110-AB2A-4BBB-A880-FE41995C9F82"
+    args = [a for a in cfg["NVRAM"]["Add"][k]["boot-args"].split() if a != "serial=3"]
+    if os.environ.get("CPUS"): args.append("cpus=" + os.environ["CPUS"])
+    cfg["NVRAM"]["Add"][k]["boot-args"] = " ".join(args)
 # KTTY=1: show the whole kernel console (printf/kprintf) on the screen, see bringup/ktty and tools/make_ktty.py
 if os.environ.get("KTTY") == "1":
     sys.path.insert(0, str(ROOT / "tools"))
