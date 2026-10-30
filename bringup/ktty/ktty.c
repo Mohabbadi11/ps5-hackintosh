@@ -100,10 +100,6 @@ static void window(const char *tag)
     dump_lapic(" ->");
 }
 
-static inline u8 inb(u16 p) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(p)); return v; }
-static inline void outb(u16 p, u8 v) { __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(p)); }
-static inline void wrmsr64(u32 msr, u64 v) { __asm__ volatile("wrmsr" :: "c"(msr), "a"((u32)v), "d"((u32)(v >> 32))); }
-
 /* the kernel's _lapic_interrupt tripwire (red square) hangs if the core takes an interrupt: the last label names the step */
 static void lapic_probe(void)
 {
