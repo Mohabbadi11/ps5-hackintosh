@@ -17,7 +17,7 @@ PLACEHOLDER = bytes.fromhex("0df0adde")          # 0xDEADF00D little endian
 def _symbols():
     # nm prints the kernel's symbols and then aborts on the first kext it cannot parse: keep what it printed
     out = subprocess.run(["/usr/bin/nm", str(ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc")], capture_output=True, text=True).stdout
-    return {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] in ("T", "t")}
+    return {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] in ("T", "t", "S", "D", "s", "d")}
 
 
 MAIN_SYM, BLOB_MAX = "_nfs4_named_attr_get", 0x83f0
