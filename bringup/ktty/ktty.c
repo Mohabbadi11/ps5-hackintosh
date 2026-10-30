@@ -122,6 +122,13 @@ __attribute__((section(".text.entry"), used))
 void ktty_main(u8 c)
 {
     const u32 state_off = KTTY_FB_OFF + 1439u * PITCH;
+    /* The LAPIC reaches the kernel with AMD's interrupt-enable registers on (IERE, 0x410 bit 0) and only vectors 0xC0-0xC4 allowed in
+     * IER6: the timer vector 0xDD and every IPI sat in IRR forever and the boot stalled waiting for the root device. The IER
+     * registers only accept writes while IERE is set (Linux finds IERE off and every IER bit on): open all vectors as soon as the
+     * kernel has mapped the LAPIC. */
+    volatile u32 *lap = lapic_base();
+    if ((u64)lap >= 0xffffff0000000000ull && (lap[0x410 / 4] & 1) && lap[0x4E0 / 4] != 0xFFFFFFFFu)
+        for (int i = 0; i < 8; i++) lap[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
 #if defined(KTTY_RETURN_PAT) || defined(KTTY_DUMP_PAT)
     out32(0x2000, state_off | 0x80000000u);
     if ((in32(0x2004) >> 24) == 0x5A) {                 /* the screen is initialised: the matchers' state is valid */

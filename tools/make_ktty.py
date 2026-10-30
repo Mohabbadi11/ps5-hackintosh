@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Build the kernel text console patch (bringup/ktty/ktty.c) as OpenCore Kernel>Patch entries for Monterey (21.6.0):
   _serial_init          -> mov eax,1; ret          (the kernel believes a UART is present, so it routes console output to serial_putc)
-  _serial_putc_options  -> blob: jmp main at +0x00 (serial_putc_options), jmp main at +0x70 (serial_putc, 0x70 further on in
-                           the kernel), main + font from +0x80, overwriting the unused audit MAC checks that follow
+  _serial_putc_options  -> jmp main           (rel32; the kernel's own serial output routines)
+  _serial_putc          -> jmp main
+  _nfs4_named_attr_get  -> main + font        (33 KB of NFSv4 code a local APFS boot never runs; the audit MAC checks that this blob
+                           used to overwrite are needed as soon as launchd runs auditon/setaudit_addr)
 Prints nothing; imported by make_baremetal_efi.py (KTTY=1)."""
-import os, subprocess, tempfile
+import os, struct, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -12,19 +14,22 @@ LLVM = "/opt/homebrew/opt/llvm@18/bin"
 PLACEHOLDER = bytes.fromhex("0df0adde")          # 0xDEADF00D little endian
 
 
-def _putc_options():
+def _symbols():
+    # nm prints the kernel's symbols and then aborts on the first kext it cannot parse: keep what it printed
     out = subprocess.run(["/usr/bin/nm", str(ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc")], capture_output=True, text=True).stdout
-    for l in out.splitlines():
-        p = l.split()
-        if len(p) == 3 and p[2] == "_serial_putc_options": return int(p[0], 16)
+    return {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] in ("T", "t")}
+
+
+MAIN_SYM, BLOB_MAX = "_nfs4_named_attr_get", 0x83f0
+
+
+def _main_addr():
+    return _symbols()[MAIN_SYM]
 
 
 def halt_delta():
-    """Distance from ktty_main (blob + 0x80, patched at _serial_putc_options) to the patched _halt_all_cpus, from the Monterey KC."""
-    # nm prints the kernel's symbols and then aborts on the first kext it cannot parse: keep what it printed
-    out = subprocess.run(["/usr/bin/nm", str(ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc")], capture_output=True, text=True).stdout
-    sym = {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] == "T"}
-    return sym["_halt_all_cpus"] - (sym["_serial_putc_options"] + 0x80)
+    """Distance from ktty_main (patched at MAIN_SYM) to the patched _halt_all_cpus, from the Monterey KC."""
+    return _symbols()["_halt_all_cpus"] - _main_addr()
 
 
 LAPIC_VBASE = 0xffffff80012fc8a8        # the kernel variable holding the LAPIC's virtual base (legacy_read/legacy_write, Monterey 21.6.0)
@@ -35,7 +40,7 @@ def build_blob():
         obj, elf, binf = f"{td}/k.o", f"{td}/k.elf", f"{td}/k.bin"
         subprocess.check_call([f"{LLVM}/clang", "-target", "x86_64-unknown-none-elf", "-ffreestanding", "-fno-stack-protector",
                                "-mno-red-zone", "-mno-sse", "-mno-mmx", "-mno-avx", "-fPIE", "-fno-builtin", "-Os",
-                               "-fvisibility=hidden", f"-DKTTY_HALT_DELTA={halt_delta()}", f"-DKTTY_LAPIC_DELTA={LAPIC_VBASE - (0xffffff80003b6990 * 0 + _putc_options() + 0x80)}"] + ([f'-DKTTY_RETURN_PAT="{os.environ["KTTY_RETURN"]}"'] if os.environ.get("KTTY_RETURN") else []) +
+                               "-fvisibility=hidden", f"-DKTTY_HALT_DELTA={halt_delta()}", f"-DKTTY_LAPIC_DELTA={LAPIC_VBASE - _main_addr()}"] + ([f'-DKTTY_RETURN_PAT="{os.environ["KTTY_RETURN"]}"'] if os.environ.get("KTTY_RETURN") else []) +
                               ([f'-DKTTY_DUMP_PAT="{os.environ["KTTY_DUMP"]}"'] if os.environ.get("KTTY_DUMP") else []) +
                               ["-c", str(ROOT / "bringup/ktty/ktty.c"), "-o", obj])
         Path(f"{td}/l.ld").write_text("ENTRY(ktty_main)\nSECTIONS { . = 0; .text : { *(.text.entry) *(.text .text.*) } "
@@ -43,13 +48,18 @@ def build_blob():
         subprocess.check_call([f"{LLVM}/ld.lld", "-nostdlib", "-static", "-T", f"{td}/l.ld", obj, "-o", elf])
         subprocess.check_call([f"{LLVM}/llvm-objcopy", "-O", "binary", elf, binf])
         main = Path(binf).read_bytes()
-    blob = bytearray(b"\xCC" * 0x80)
-    blob[0:2] = bytes([0xEB, 0x7E])              # +0x00: jmp +0x7e -> 0x80
-    blob[0x70:0x72] = bytes([0xEB, 0x0E])        # +0x70: jmp +0x0e -> 0x80
-    blob += main
-    assert len(blob) <= 0x1ca0, f"blob too big: {len(blob)}"   # up to mac_policy_list_busy (the audit MAC checks and mac_audit_* are unused at boot)
-    assert PLACEHOLDER in blob
-    return bytes(blob)
+    assert len(main) <= BLOB_MAX, f"blob too big: {len(main)}"
+    assert PLACEHOLDER in main
+    return bytes(main)
+
+
+def header_blob():
+    """The layout bringup/ebstest expects: 0x80 bytes of padding, then main."""
+    return b"\xCC" * 0x80 + build_blob()
+
+
+def _jmp(site, target):
+    return b"\xE9" + struct.pack("<i", target - (site + 5))
 
 
 def patches():
@@ -57,13 +67,17 @@ def patches():
         return {"Arch": "x86_64", "Base": sym, "Comment": comment, "Count": 1, "Enabled": True, "Find": b"",
                 "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
                 "Replace": code, "ReplaceMask": b"", "Skip": 0}
+    sym = _symbols()
+    main = sym[MAIN_SYM]
     return [entry("_serial_init", bytes.fromhex("b801000000c3"), "ktty: serial_init always succeeds"),
-            entry("_serial_putc_options", build_blob(), "ktty: text console in serial_putc")]
+            entry("_serial_putc_options", _jmp(sym["_serial_putc_options"], main), "ktty: serial_putc_options jumps to the console"),
+            entry("_serial_putc", _jmp(sym["_serial_putc"], main), "ktty: serial_putc jumps to the console"),
+            entry(MAIN_SYM, build_blob(), "ktty: text console (replaces unused NFSv4 code)")]
 
 
 if __name__ == "__main__":
     import sys
-    b = build_blob()
+    b = header_blob()
     print(len(b), "bytes; placeholder count", b.count(PLACEHOLDER))
     if len(sys.argv) > 1:                          # C header for bringup/ebstest
         with open(sys.argv[1], "w") as f:
