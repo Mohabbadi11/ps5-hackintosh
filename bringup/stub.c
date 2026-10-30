@@ -328,8 +328,21 @@ static void stage5_launch(u64 bp)
     cs[0] = 0x50354643U; cs[1] = 0; cs[2] = cy + 1; cs[3] = 0;
     *(volatile u64 *)0x300001f10ULL = fbaddr;
     *(volatile u32 *)0x300001f18ULL = 0;               /* console not quiet: draw the debug ring */
-    if (fbpatch) *(volatile u64 *)fbpatch = fbaddr;
-    puts_("framebuffer at "); put_hex(fbaddr, 12); puts_("\n");
+    /* macOS' IONDRVFramebuffer only takes a boot framebuffer that lies inside a PCI BAR of the GPU (20:00.0). BAR0 (256 MB) aliases the
+     * first 256 MB of the carve-out, so when the picture is that low (bringup/tools/kms_linear.py arranges it) tell UEFI/XNU the BAR
+     * address; checked by looking at the picture's signature through both. */
+    u64 gopfb = fbaddr;
+    u64 vofs = realfb - 0x450000000ULL;
+    u64 bar0 = ((u64)pci_cfg(0x20, 0, 0, 0x14) << 32) | (pci_cfg(0x20, 0, 0, 0x10) & ~0xFULL);
+    puts_("GPU BAR0 "); put_hex(bar0, 12); puts_("  picture at VRAM+"); put_hex(vofs, 8);
+    if (bar0 && bar0 < 0x100000000ULL && vofs + (u64)FB_PITCH * FB_H <= 0x10000000ULL) {
+        volatile u32 *al = (volatile u32 *)(bar0 + vofs), *rl = (volatile u32 *)realfb;
+        if (al[0] == rl[0] && al[1] == rl[1] && al[7] == rl[7] && rl[0] == 0xDEADBE00u) { gopfb = bar0 + vofs; puts_("  via BAR0"); }
+        else puts_("  BAR0 alias NOT confirmed");
+    }
+    puts_("\n");
+    if (fbpatch) *(volatile u64 *)fbpatch = gopfb;
+    puts_("framebuffer at "); put_hex(gopfb, 12); puts_("\n");
     /* The crash kexec shuts the local APIC down (software-disable); UEFI's LocalApicTimerDxe assumes it is enabled,
      * otherwise BdsWait never sees a timer tick and the boot manager sleeps forever. */
     volatile u32 *lapic = (volatile u32 *)0xFEE00000ULL;

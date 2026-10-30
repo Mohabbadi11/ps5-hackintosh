@@ -75,6 +75,17 @@ def ioctl(fd, req, obj):
 
 def u32s(n): return (ctypes.c_uint32 * max(n, 1))()
 
+CARVE, CARVE_SIZE, LOW_LIMIT = 0x450000000, 0x20000000, 0x0F000000
+
+def find_vram(memfd, sig, hint):
+    """VRAM offset of the buffer that starts with sig (the carve-out is system RAM): try the predicted spot, then scan from the top."""
+    if hint is not None and hint >= 0 and os.pread(memfd, 32, CARVE + hint) == sig:
+        return hint
+    for off in range(CARVE_SIZE - 0x1000, -1, -0x1000):
+        if os.pread(memfd, 32, CARVE + off) == sig:
+            return off
+    return None
+
 def main():
     fd = os.open("/dev/dri/card0", os.O_RDWR)
     try:
@@ -115,9 +126,26 @@ def main():
     crtc_id = e.crtc_id or crtcs[0]
     print("using connector", c.connector_id, "crtc", crtc_id)
 
-    d = CreateDumb(); d.width, d.height, d.bpp = W, H, 32
-    ioctl(fd, CREATE_DUMB, d)
-    print(f"dumb buffer: handle {d.handle} pitch {d.pitch} size {d.size}")
+    # The GPU's BAR0 (256 MB at 0xd0000000) is an alias of the first 256 MB of the VRAM carve-out: macOS' IONDRVFramebuffer only
+    # accepts a boot framebuffer inside a PCI BAR, so the picture has to sit in that part. amdgpu hands VRAM out from the top in
+    # 16 MB steps; fill the top with dumb buffers (held until the crash) until a new one lands low enough.
+    memfd = os.open("/dev/mem", os.O_RDONLY)
+    hold, hint = [], None
+    for n in range(48):
+        d = CreateDumb(); d.width, d.height, d.bpp = W, H, 32
+        ioctl(fd, CREATE_DUMB, d)
+        mp = MapDumb(); mp.handle = d.handle
+        ioctl(fd, MAP_DUMB, mp)
+        mm = mmap.mmap(fd, d.size, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=mp.offset)
+        sig = struct.pack("<8I", *[0xC0DE0000 + (n << 8) + k for k in range(8)])
+        mm[0:32] = sig
+        off = find_vram(memfd, sig, hint)
+        print(f"buffer {n}: VRAM offset {off if off is None else hex(off)}")
+        if off is None or off <= LOW_LIMIT:
+            break
+        hint = off - 0x1000000
+        hold.append((d, mm))
+    print(f"dumb buffer: handle {d.handle} pitch {d.pitch} size {d.size} ({len(hold)} filler buffers held)")
     f = FbCmd(); f.width, f.height, f.pitch, f.bpp, f.depth, f.handle = W, H, d.pitch, 32, 24, d.handle
     ioctl(fd, ADDFB, f)
     mp = MapDumb(); mp.handle = d.handle
