@@ -75,51 +75,49 @@ static volatile u32 *lapic_base(void)
     return (volatile u32 *)*pv;
 }
 
+static inline u8 inb(u16 p) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(p)); return v; }
+static inline void outb(u16 p, u8 v) { __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(p)); }
+static inline void wrmsr64(u32 msr, u64 v) { __asm__ volatile("wrmsr" :: "c"(msr), "a"((u32)v), "d"((u32)(v >> 32))); }
+
 static void dump_lapic(const char *tag)
 {
     volatile u32 *l = lapic_base();
-    u64 rfl; __asm__ volatile("pushfq; pop %0" : "=r"(rfl));
-    struct { u16 limit; u64 base; } __attribute__((packed)) idt;
-    __asm__ volatile("sidt %0" : "=m"(idt));
-    kputs("\nLAPIC "); kputs(tag); kputs(": base "); khex((u64)l, 16); kputs(" rflags "); khex(rfl, 4);
-    kputs(" apicbase "); khex(rdmsr64(0x1B), 8);
-    kputs("\n id "); khex(l[0x20 / 4], 8); kputs(" ver "); khex(l[0x30 / 4], 8); kputs(" tpr "); khex(l[0x80 / 4], 4);
-    kputs(" ppr "); khex(l[0xA0 / 4], 4); kputs(" svr "); khex(l[0xF0 / 4], 4); kputs(" esr "); khex(l[0x280 / 4], 4);
-    kputs("\n lvt timer "); khex(l[0x320 / 4], 8); kputs(" lint0 "); khex(l[0x350 / 4], 8); kputs(" lint1 "); khex(l[0x360 / 4], 8);
-    kputs(" err "); khex(l[0x370 / 4], 8);
-    kputs("\n timer init "); khex(l[0x380 / 4], 8); kputs(" cur "); khex(l[0x390 / 4], 8); kputs(" div "); khex(l[0x3E0 / 4], 4);
-    kputs("\n isr "); for (int i = 7; i >= 0; i--) { khex(l[(0x100 + 16 * i) / 4], 8); kch(' '); }
-    kputs("\n irr "); for (int i = 7; i >= 0; i--) { khex(l[(0x200 + 16 * i) / 4], 8); kch(' '); }
-    kputs("\n idt limit "); khex(idt.limit, 4); kputs(" base "); khex(idt.base, 16); kch('\n');
+    kputs(tag); kputs(": tpr "); khex(l[0x80 / 4], 2); kputs(" lint0 "); khex(l[0x350 / 4], 8);
+    kputs(" isr6/7 "); khex(l[0x160 / 4], 8); kch(' '); khex(l[0x170 / 4], 8);
+    kputs(" irr6/7 "); khex(l[0x260 / 4], 8); kch(' '); khex(l[0x270 / 4], 8); kch('\n');
 }
 
-static void dump_core(void)
+/* spin with interrupts on: if the core takes one, the kernel's _lapic_interrupt tripwire (red square) paints and hangs, so the
+ * last label on screen names the step that unblocked it */
+static void window(const char *tag)
 {
-    u64 cr0, cr4, cr8, cr3; u32 a, b, c, d;
-    u64 efer = rdmsr64(0xC0000080);
-    __asm__ volatile("mov %%cr0, %0; mov %%cr3, %1; mov %%cr4, %2; mov %%cr8, %3" : "=r"(cr0), "=r"(cr3), "=r"(cr4), "=r"(cr8));
-    kputs("\nCORE cr0 "); khex(cr0, 8); kputs(" cr3 "); khex(cr3, 16); kputs(" cr4 "); khex(cr4, 8); kputs(" cr8 "); khex(cr8, 2);
-    kputs("\n efer "); khex(efer, 8); kputs(" vm_cr "); khex(rdmsr64(0xC0010114), 8); kputs(" hwcr "); khex(rdmsr64(0xC0010015), 8);
-    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
-    kputs("\n cpuid1 ecx "); khex(c, 8);
-    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x8000000A), "c"(0));
-    kputs("\n svm "); khex(a, 8); kputs(" d "); khex(d, 8);
-    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000001), "c"(0));
-    kputs(" ext1 ecx "); khex(c, 8); kputs(" syscfg "); khex(rdmsr64(0xC0010010), 8); kch('\n');
+    kputs(tag); kch('\n');
+    __asm__ volatile("sti");
+    for (volatile u64 i = 0; i < 100000000ull; i++) { }
+    __asm__ volatile("cli");
 }
 
 static void lapic_probe(void)
 {
-    dump_lapic("before");
-    dump_core();
-    /* The LAPIC takes the self-IPI (IRR) but the core never accepts a maskable interrupt, whatever the vector. An NMI ignores IF
-     * and TPR: if it reaches the kernel's NMI handler the LAPIC->core path works and only INTR gating is at fault. */
     volatile u32 *l = lapic_base();
-    kputs("nmi\n");
-    l[0x310 / 4] = 0;
-    l[0x300 / 4] = 0x00044400u;
-    for (volatile u64 i = 0; i < 400000000ull; i++) { }
-    dump_lapic("after nmi");
+    kputs("\nPROBE ext "); khex(l[0x400 / 4], 8); kch(' '); khex(l[0x410 / 4], 8); kch(' '); khex(l[0x4E0 / 4], 8);
+    outb(0x20, 0x0B); outb(0xA0, 0x0B);
+    kputs(" pic imr "); khex(inb(0x21), 2); kch(' '); khex(inb(0xA1), 2); kputs(" isr "); khex(inb(0x20), 2); kch(' '); khex(inb(0xA0), 2); kch('\n');
+    dump_lapic("start");
+    u64 efer = rdmsr64(0xC0000080);
+    wrmsr64(0xC0000080, efer | (1u << 12));
+    __asm__ volatile("stgi");                                  /* S1: the global interrupt flag */
+    wrmsr64(0xC0000080, efer);
+    window("S1 stgi");
+    l[0x350 / 4] |= 0x10000; outb(0x21, 0xFF); outb(0xA1, 0xFF);   /* S2: no ExtINT / PIC */
+    window("S2 lint0 masked, pic masked");
+    l[0xF0 / 4] = 0x0DA; l[0xF0 / 4] = 0x1DA; l[0xB0 / 4] = 0;    /* S3: LAPIC software disable/enable + EOI, resend the IPI */
+    l[0x310 / 4] = 0; l[0x300 / 4] = 0x000440DEu;
+    window("S3 svr cycled, ipi resent");
+    kputs("S4 hlt\n");                                       /* S4: does the core wake from halt? */
+    __asm__ volatile("sti; hlt; cli");
+    kputs("S4 woke\n");
+    dump_lapic("end");
 }
 #endif
 
