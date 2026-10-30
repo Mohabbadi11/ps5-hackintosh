@@ -164,6 +164,11 @@ if os.environ.get("RETURN") == "1":
         "Arch": "x86_64", "Base": "_halt_all_cpus", "Comment": "ps5 - return to Linux", "Count": 1, "Enabled": True, "Find": b"",
         "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
         "Replace": retkern, "ReplaceMask": b"", "Skip": 0})
+# XNU's clocks: OpenCore tells it a 1 GHz TSC / 100 MHz bus, the hardware is 1596.3 MHz / ~25 MHz (tools/make_tscfix.py). TSCFIX=0 leaves them.
+if os.environ.get("TSCFIX", "1") != "0":
+    sys.path.insert(0, str(ROOT / "tools"))
+    import make_tscfix
+    cfg["Kernel"]["Patch"] = make_tscfix.patches() + cfg["Kernel"]["Patch"]
 # KTTY=1: show the whole kernel console (printf/kprintf) on the screen, see bringup/ktty and tools/make_ktty.py
 if os.environ.get("KTTY") == "1":
     sys.path.insert(0, str(ROOT / "tools"))
