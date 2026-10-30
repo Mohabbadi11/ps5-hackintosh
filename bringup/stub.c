@@ -336,9 +336,13 @@ static void stage5_launch(u64 bp)
     u64 bar0 = ((u64)pci_cfg(0x20, 0, 0, 0x14) << 32) | (pci_cfg(0x20, 0, 0, 0x10) & ~0xFULL);
     puts_("GPU BAR0 "); put_hex(bar0, 12); puts_("  picture at VRAM+"); put_hex(vofs, 8);
     if (bar0 && bar0 < 0x100000000ULL && vofs + (u64)FB_PITCH * FB_H <= 0x10000000ULL) {
+        /* the stub's own text covers the top-left of the picture: compare two rows far below it (colour ramp / x,y code) */
         volatile u32 *al = (volatile u32 *)(bar0 + vofs), *rl = (volatile u32 *)realfb;
-        if (al[0] == rl[0] && al[1] == rl[1] && al[7] == rl[7] && rl[0] == 0xDEADBE00u) { gopfb = bar0 + vofs; puts_("  via BAR0"); }
-        else puts_("  BAR0 alias NOT confirmed");
+        u32 a = 700u * (FB_PITCH / 4) + 1200u, b = 1000u * (FB_PITCH / 4) + 1234u;
+        int same = 1;
+        for (u32 k = 0; k < 8; k++) if (al[a + k] != rl[a + k] || al[b + k] != rl[b + k]) same = 0;
+        if (same && rl[b] != 0) { gopfb = bar0 + vofs; puts_("  via BAR0"); }
+        else { puts_("  BAR0 alias NOT confirmed "); put_hex(al[b], 8); puts_(" vs "); put_hex(rl[b], 8); }
     }
     puts_("\n");
     if (fbpatch) *(volatile u64 *)fbpatch = gopfb;
