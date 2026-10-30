@@ -100,16 +100,22 @@ static void window(const char *tag)
     dump_lapic(" ->");
 }
 
-/* Report what the early fix in ktty_main left, then redo the repair that unblocked the boot (IERE on, every IER bit on, TPR 0, EOI). */
+static void qdump(const char *tag, long delta, int n)
+{
+    volatile u64 *p;
+    __asm__ volatile("lea ktty_main(%%rip), %0\n\tadd %1, %0" : "=&r"(p) : "er"(delta));
+    kputs(tag);
+    for (int i = 0; i < n; i++) { if ((i & 3) == 0) kch('\n'); kch(' '); khex(p[i], 16); }
+    kch('\n');
+}
+
+/* What boot.efi told XNU about the screen (the display is the open problem), and the interrupt-enable state the fix left. */
 static void lapic_probe(void)
 {
     volatile u32 *l = lapic_base();
-    kputs("\nPROBE iere "); khex(l[0x410 / 4], 8); kputs(" ier6 "); khex(l[0x4E0 / 4], 8); kputs(" ier7 "); khex(l[0x4F0 / 4], 8); kch('\n');
-    dump_lapic("before");
-    l[0x410 / 4] = 1;
-    for (int i = 0; i < 8; i++) l[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
-    l[0x80 / 4] = 0; l[0xB0 / 4] = 0;
-    kputs("ier6 now "); khex(l[0x4E0 / 4], 8); kch('\n');
+    kputs("\nPROBE iere "); khex(l[0x410 / 4], 8); kputs(" ier6 "); khex(l[0x4E0 / 4], 8); kch('\n');
+    qdump("PE_state (init, then video: base display rowbytes w h depth ...)", KTTY_PESTATE_DELTA, 12);
+    qdump("vinfo (h w depth rowbytes base ...)", KTTY_VINFO_DELTA, 8);
 }
 #endif
 
