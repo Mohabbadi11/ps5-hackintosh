@@ -170,10 +170,11 @@ if os.environ.get("TSCFIX", "1") != "0":
     import make_tscfix
     cfg["Kernel"]["Patch"] = make_tscfix.patches() + cfg["Kernel"]["Patch"]
 # Safety: the internal Sony SSD controller (PCI 40:00.0, 104d:90eb) is class 0180 and AppleNVMe attaches to it. It fails at start today (CAP reads
-# all ones), but the boot disk is USB and the internal SSD must never be touched: keep the driver out of the kernel collection. NVMEBLOCK=0 allows it.
+# all ones), but the boot disk is USB and the internal SSD must never be touched: make the kext fail to start (Disable, not Exclude: other kexts may link
+# against it). NVMEBLOCK=0 allows it.
 if os.environ.get("NVMEBLOCK", "1") != "0":
     cfg["Kernel"]["Block"].append({"Arch": "Any", "Comment": "Never let AppleNVMe near the internal Sony SSD", "Enabled": True,
-                                    "Identifier": "com.apple.iokit.IONVMeFamily", "MaxKernel": "", "MinKernel": "", "Strategy": "Exclude"})
+                                    "Identifier": "com.apple.iokit.IONVMeFamily", "MaxKernel": "", "MinKernel": "", "Strategy": "Disable"})
 # AMD's APIC interrupt-enable registers (tools/make_ierfix.py): without this no interrupt reaches the core. IERFIX=0 leaves them.
 if os.environ.get("IERFIX", "1") != "0":
     sys.path.insert(0, str(ROOT / "tools"))
