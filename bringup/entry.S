@@ -10,6 +10,27 @@ startup_64:
     movq    %rsi, %r12
     PAINT   0xFFAA00FF, 2400, 0x63000     /* violet: the CPU is running the stub again */
     movq    %r12, %rsi
+    /* describe the framebuffer in boot_params.screen_info so the rescue Linux (sysfb simple-framebuffer + fbcon) shows its own
+     * boot on the screen: lfb_base/ext_lfb_base 0x18/0x3a, capabilities 0x36 (64-bit base), size/geometry, XRGB8888, VIDEO_TYPE_EFI */
+    movq    0x63040, %rax
+    movl    %eax, 0x18(%rsi)
+    shrq    $32, %rax
+    movl    %eax, 0x3a(%rsi)
+    movl    $2, 0x36(%rsi)
+    movw    $2560, 0x12(%rsi)
+    movw    $1440, 0x14(%rsi)
+    movw    $32, 0x16(%rsi)
+    movl    $14745600, 0x1c(%rsi)
+    movw    $10240, 0x24(%rsi)
+    movb    $8, 0x26(%rsi)
+    movb    $16, 0x27(%rsi)
+    movb    $8, 0x28(%rsi)
+    movb    $8, 0x29(%rsi)
+    movb    $8, 0x2a(%rsi)
+    movb    $0, 0x2b(%rsi)
+    movb    $8, 0x2c(%rsi)
+    movb    $24, 0x2d(%rsi)
+    movb    $0x70, 0x0f(%rsi)
     leaq    startup_64(%rip), %rax
     addq    $0x200000, %rax
     jmp     *%rax

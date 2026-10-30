@@ -399,7 +399,8 @@ static void stage5_launch(u64 bp)
         *(volatile u32 *)0x67110ULL = RL_NEXT; *(volatile u16 *)0x67114ULL = 0x18;      /* far pointer m16:32 to rl_next, code64 selector */
         for (unsigned i = 0; i < sizeof(retlow_code); i++) *(volatile u8 *)(0x67200ULL + i) = retlow_code[i];
         *(volatile u64 *)0x63010ULL = (u64)(unsigned long)startup_64;                     /* our stub entry: it sees the flag below and goes on to the kernel */
-        *(volatile u32 *)0x63030ULL = 0x52455455;                                          /* RETU */
+        *(volatile u32 *)0x63030ULL = 0x52455455;
+        *(volatile u64 *)0x63040ULL = realfb;                                              /* the picture's address, for screen_info */                                          /* RETU */
         *(volatile u64 *)0x63018ULL = bp;                                                  /* boot_params */
         puts_("return stub ready, Linux entry "); put_hex(*(volatile u64 *)0x63010ULL, 12); puts_("\n");
     }
