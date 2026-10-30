@@ -47,7 +47,7 @@ def build_blob():
     blob[0:2] = bytes([0xEB, 0x7E])              # +0x00: jmp +0x7e -> 0x80
     blob[0x70:0x72] = bytes([0xEB, 0x0E])        # +0x70: jmp +0x0e -> 0x80
     blob += main
-    assert len(blob) <= 0x1700, f"blob too big: {len(blob)}"   # up to mac_proc_check_getauid (all audit MAC checks, unused at boot)
+    assert len(blob) <= 0x1ca0, f"blob too big: {len(blob)}"   # up to mac_policy_list_busy (the audit MAC checks and mac_audit_* are unused at boot)
     assert PLACEHOLDER in blob
     return bytes(blob)
 
