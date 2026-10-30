@@ -39,6 +39,7 @@ rl_next:
     /* ...then quiet it: mask its timer, software-disable it (Linux brings it back up) */
     movl    $0x10000, 0x320(%r8)
     movl    $0x000000FF, 0xF0(%r8)
+    PAINT 0xFF00FFFF, 2496, 0x63000                /* cyan: about to jump into the stub / Linux */
     movq    0x63018, %rsi
     movq    0x63010, %rax
     jmp     *%rax

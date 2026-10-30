@@ -1,9 +1,19 @@
+#include "retlinux/paint.inc"
     .section .text.entry, "ax"
     .code64
     .globl startup_64
 startup_64:
     cli
     cld
+    cmpl    $0x52455455, 0x63030          /* "RETU": re-entered from the macOS return path (bringup/retlinux): mark it on the screen */
+    jne     .Lnormal                      /* and go straight on to the real Linux kernel, skipping the stage logic */
+    movq    %rsi, %r12
+    PAINT   0xFFAA00FF, 2400, 0x63000     /* violet: the CPU is running the stub again */
+    movq    %r12, %rsi
+    leaq    startup_64(%rip), %rax
+    addq    $0x200000, %rax
+    jmp     *%rax
+.Lnormal:
     movq    %rsi, %r12                  /* boot_params, callee-saved across stage1_main */
     leaq    __bss_start(%rip), %rdi
     leaq    __bss_end(%rip), %rcx

@@ -17,7 +17,7 @@ mkdir -p "$OUT"
 
 CFLAGS="-target x86_64-unknown-none-elf -ffreestanding -fno-stack-protector -mno-red-zone -mno-sse -mno-mmx -mno-avx \
         -fPIE -fvisibility=hidden -fno-builtin -O2"
-"$L/clang" -target x86_64-unknown-none-elf -c "$HERE/entry.S" -o "$OUT/entry.o"
+"$L/clang" -target x86_64-unknown-none-elf -I"$HERE" -c "$HERE/entry.S" -o "$OUT/entry.o"
 # the low-memory "return to Linux" stub (linked at its fixed physical address) as a C array for stub.c
 "$L/clang" -target x86_64-unknown-none-elf -I"$HERE/retlinux" -c "$HERE/retlinux/retlow.S" -o "$OUT/retlow.o"
 "$L/ld.lld" -nostdlib -static -e rl_start -Ttext=0x67200 "$OUT/retlow.o" -o "$OUT/retlow.elf"
