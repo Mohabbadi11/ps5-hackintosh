@@ -58,6 +58,15 @@ static void glyph(u32 col, u32 row, u8 c)
 
 static void kch(u8 c);
 
+/* The LAPIC's virtual base lives in a kernel variable whose distance from this routine is known at build time (KTTY_LAPIC_DELTA). */
+static volatile u32 *lapic_base(void)
+{
+    volatile u64 *pv;
+    __asm__ volatile("lea ktty_main(%%rip), %0\n\tadd %1, %0" : "=&r"(pv) : "er"((long)KTTY_LAPIC_DELTA));
+    return (volatile u32 *)*pv;
+}
+
+
 #ifdef KTTY_DUMP_PAT
 static void kputs(const char *t) { while (*t) kch((u8)*t++); }
 static void khex(u64 v, int digits)
@@ -68,13 +77,6 @@ static inline u64 rdmsr64(u32 msr) { u32 lo, hi; __asm__ volatile("rdmsr" : "=a"
 
 /* What does the LAPIC look like, and does the CPU take interrupts at all? The kernel's LAPIC base lives in a kernel variable whose
  * distance from this routine is known at build time (KTTY_LAPIC_DELTA); registers are read the way the kernel does it (base + reg). */
-static volatile u32 *lapic_base(void)
-{
-    volatile u64 *pv;
-    __asm__ volatile("lea ktty_main(%%rip), %0\n\tadd %1, %0" : "=&r"(pv) : "er"((long)KTTY_LAPIC_DELTA));
-    return (volatile u32 *)*pv;
-}
-
 static inline u8 inb(u16 p) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(p)); return v; }
 static inline void outb(u16 p, u8 v) { __asm__ volatile("outb %0, %1" :: "a"(v), "Nd"(p)); }
 static inline void wrmsr64(u32 msr, u64 v) { __asm__ volatile("wrmsr" :: "c"(msr), "a"((u32)v), "d"((u32)(v >> 32))); }
@@ -87,37 +89,11 @@ static void dump_lapic(const char *tag)
     kputs(" irr6/7 "); khex(l[0x260 / 4], 8); kch(' '); khex(l[0x270 / 4], 8); kch('\n');
 }
 
-/* spin with interrupts on: if the core takes one, the kernel's _lapic_interrupt tripwire (red square) paints and hangs, so the
- * last label on screen names the step that unblocked it */
-static void window(const char *tag)
-{
-    kputs(tag); kch('\n');
-    __asm__ volatile("sti");
-    for (volatile u64 i = 0; i < 100000000ull; i++) { }
-    __asm__ volatile("cli");
-}
-
 static void lapic_probe(void)
 {
     volatile u32 *l = lapic_base();
     kputs("\nPROBE ext "); khex(l[0x400 / 4], 8); kch(' '); khex(l[0x410 / 4], 8); kch(' '); khex(l[0x4E0 / 4], 8);
-    outb(0x20, 0x0B); outb(0xA0, 0x0B);
-    kputs(" pic imr "); khex(inb(0x21), 2); kch(' '); khex(inb(0xA1), 2); kputs(" isr "); khex(inb(0x20), 2); kch(' '); khex(inb(0xA0), 2); kch('\n');
-    dump_lapic("start");
-    u64 efer = rdmsr64(0xC0000080);
-    wrmsr64(0xC0000080, efer | (1u << 12));
-    __asm__ volatile("stgi");                                  /* S1: the global interrupt flag */
-    wrmsr64(0xC0000080, efer);
-    window("S1 stgi");
-    l[0x350 / 4] |= 0x10000; outb(0x21, 0xFF); outb(0xA1, 0xFF);   /* S2: no ExtINT / PIC */
-    window("S2 lint0 masked, pic masked");
-    l[0xF0 / 4] = 0x0DA; l[0xF0 / 4] = 0x1DA; l[0xB0 / 4] = 0;    /* S3: LAPIC software disable/enable + EOI, resend the IPI */
-    l[0x310 / 4] = 0; l[0x300 / 4] = 0x000440DEu;
-    window("S3 svr cycled, ipi resent");
-    kputs("S4 hlt\n");                                       /* S4: does the core wake from halt? */
-    __asm__ volatile("sti; hlt; cli");
-    kputs("S4 woke\n");
-    dump_lapic("end");
+    kch('\n'); dump_lapic("now");
 }
 #endif
 
@@ -125,6 +101,14 @@ __attribute__((section(".text.entry"), used))
 void ktty_main(u8 c)
 {
     const u32 state_off = KTTY_FB_OFF + 1439u * PITCH;
+    /* The LAPIC comes up with AMD's interrupt-enable registers switched on (IERE, 0x410 bit 0) and only a few vectors allowed (IER6
+     * was 0x1f: the kernel's timer vector 0xDD never reached the core, nor did any IPI). XNU does not know these registers: make
+     * every vector pass again as soon as the kernel has mapped the LAPIC. */
+    volatile u32 *lap = lapic_base();
+    if ((u64)lap >= 0xffffff0000000000ull && (lap[0x410 / 4] & 1)) {
+        lap[0x410 / 4] = 0;
+        for (int i = 0; i < 8; i++) lap[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
+    }
 #if defined(KTTY_RETURN_PAT) || defined(KTTY_DUMP_PAT)
     out32(0x2000, state_off | 0x80000000u);
     if ((in32(0x2004) >> 24) == 0x5A) {                 /* the screen is initialised: the matchers' state is valid */
