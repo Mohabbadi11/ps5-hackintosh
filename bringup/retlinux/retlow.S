@@ -13,11 +13,13 @@
 rl_start:
     PAINT 0xFFFFFF00, 2200, 0x63000                /* yellow: the kernel's CR3 switch worked, running in low memory */
     lgdt    0x67100
+    PAINT 0xFFFF8000, 2300, 0x63000                /* orange: lgdt done */
     movl    $0x20, %eax                   /* CR4 = PAE only: drops SMEP/SMAP/PCID/PGE the kernel had enabled */
     movq    %rax, %cr4
+    PAINT 0xFFFF00FF, 2400, 0x63000                /* magenta: CR4 written */
     rex64 ljmp *0x67110                   /* reload CS with our 64-bit code segment */
 rl_next:
-    PAINT 0xFF00FF00, 2300, 0x63000                /* green: CS reloaded with our GDT */
+    PAINT 0xFF00FF00, 2480, 0x63000                /* green: CS reloaded with our GDT */
     movw    $0x10, %ax
     movw    %ax, %ds
     movw    %ax, %es
