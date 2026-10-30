@@ -90,52 +90,36 @@ static void dump_lapic(const char *tag)
     kputs("\n timer init "); khex(l[0x380 / 4], 8); kputs(" cur "); khex(l[0x390 / 4], 8); kputs(" div "); khex(l[0x3E0 / 4], 4);
     kputs("\n isr "); for (int i = 7; i >= 0; i--) { khex(l[(0x100 + 16 * i) / 4], 8); kch(' '); }
     kputs("\n irr "); for (int i = 7; i >= 0; i--) { khex(l[(0x200 + 16 * i) / 4], 8); kch(' '); }
-    volatile u32 *g = (volatile u32 *)(idt.base);
-    kputs("\n idt limit "); khex(idt.limit, 4); kputs(" base "); khex(idt.base, 16);
-    static const u8 gv[3] = { 0x20, 0xDD, 0xDE };
-    for (int k = 0; k < 3; k++) {
-        kputs("\n gate "); khex(gv[k], 2); kch(' ');
-        for (int j = 3; j >= 0; j--) { khex(g[gv[k] * 4 + j], 8); kch(' '); }
-    }
-    kch('\n');
+    kputs("\n idt limit "); khex(idt.limit, 4); kputs(" base "); khex(idt.base, 16); kch('\n');
 }
 
 static void dump_core(void)
 {
     u64 cr0, cr4, cr8, cr3; u32 a, b, c, d;
-    struct { u16 limit; u64 base; } __attribute__((packed)) gdt;
-    u16 cs; u64 efer = rdmsr64(0xC0000080);
+    u64 efer = rdmsr64(0xC0000080);
     __asm__ volatile("mov %%cr0, %0; mov %%cr3, %1; mov %%cr4, %2; mov %%cr8, %3" : "=r"(cr0), "=r"(cr3), "=r"(cr4), "=r"(cr8));
-    __asm__ volatile("sgdt %0" : "=m"(gdt));
-    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
     kputs("\nCORE cr0 "); khex(cr0, 8); kputs(" cr3 "); khex(cr3, 16); kputs(" cr4 "); khex(cr4, 8); kputs(" cr8 "); khex(cr8, 2);
     kputs("\n efer "); khex(efer, 8); kputs(" vm_cr "); khex(rdmsr64(0xC0010114), 8); kputs(" hwcr "); khex(rdmsr64(0xC0010015), 8);
-    kputs(" cs "); khex(cs, 4); kputs(" gdt "); khex(gdt.limit, 4); kch(' '); khex(gdt.base, 16);
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
     kputs("\n cpuid1 ecx "); khex(c, 8);
-    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x40000000), "c"(0));
-    kputs(" hv "); khex(a, 8); kch(' '); khex(b, 8); kch(' '); khex(c, 8); kch(' '); khex(d, 8);
     __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x8000000A), "c"(0));
-    kputs("\n svm "); khex(a, 8); kputs(" d "); khex(d, 8); kch('\n');
+    kputs("\n svm "); khex(a, 8); kputs(" d "); khex(d, 8);
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000001), "c"(0));
+    kputs(" ext1 ecx "); khex(c, 8); kputs(" syscfg "); khex(rdmsr64(0xC0010010), 8); kch('\n');
 }
 
 static void lapic_probe(void)
 {
-    dump_lapic("before sti");
+    dump_lapic("before");
     dump_core();
-    __asm__ volatile("sti");
-    for (volatile u64 i = 0; i < 400000000ull; i++) { }
-    __asm__ volatile("cli");
-    dump_lapic("after sti");
-    /* int 0xDD already reached _lapic_interrupt: the IDT is fine. Does the core take a self-IPI the LAPIC delivers? */
+    /* The LAPIC takes the self-IPI (IRR) but the core never accepts a maskable interrupt, whatever the vector. An NMI ignores IF
+     * and TPR: if it reaches the kernel's NMI handler the LAPIC->core path works and only INTR gating is at fault. */
     volatile u32 *l = lapic_base();
-    kputs("ipi 0xDE\n");
+    kputs("nmi\n");
     l[0x310 / 4] = 0;
-    l[0x300 / 4] = 0x000440DEu;
-    __asm__ volatile("sti");
+    l[0x300 / 4] = 0x00044400u;
     for (volatile u64 i = 0; i < 400000000ull; i++) { }
-    __asm__ volatile("cli");
-    dump_lapic("after ipi");
+    dump_lapic("after nmi");
 }
 #endif
 
