@@ -763,3 +763,62 @@ void PS5SalinaGbE::pollTimer(OSObject *owner, IOTimerEventSource *t)
     self->poll();
     t->setTimeoutMS(1);
 }
+
+// ---------------------------------------------------------------------------------------------------------------- loader
+
+#undef super
+#define super IOService
+OSDefineMetaClassAndStructors(PS5SalinaGbELoader, IOService)
+
+bool PS5SalinaGbELoader::start(IOService *provider)
+{
+    if (!super::start(provider)) return false;
+    LOG("loader: kext is loaded");
+    registerService();
+    IOCreateThread(PS5SalinaGbELoader::worker, this);
+    return true;
+}
+
+void PS5SalinaGbELoader::worker(void *arg)
+{
+    IOSleep(8000);                                   // give the normal personality match a chance first
+    for (int round = 0; round < 6; round++) {
+        OSDictionary *m = IOService::serviceMatching("IOPCIDevice");
+        OSIterator *it = m ? IOService::getMatchingServices(m) : nullptr;
+        if (m) m->release();
+        IOPCIDevice *nic = nullptr;
+        if (it) {
+            OSObject *o;
+            while ((o = it->getNextObject())) {
+                IOPCIDevice *d = OSDynamicCast(IOPCIDevice, o);
+                if (d && d->configRead16(kIOPCIConfigVendorID) == 0x104d && d->configRead16(kIOPCIConfigDeviceID) == 0x9104) { nic = d; nic->retain(); break; }
+            }
+            it->release();
+        }
+        if (!nic) { LOG("loader: PCI nub 104d:9104 not found (round %d)", round); IOSleep(3000); continue; }
+
+        int children = 0;
+        OSIterator *ci = nic->getClientIterator();
+        if (ci) {
+            OSObject *o;
+            while ((o = ci->getNextObject())) {
+                children++;
+                IOService *s = OSDynamicCast(IOService, o);
+                LOG("loader: nub %02x:%02x.%x has client %s", nic->getBusNumber(), nic->getDeviceNumber(), nic->getFunctionNumber(), s ? s->getName() : "?");
+            }
+            ci->release();
+        }
+        LOG("loader: NIC nub found, %d clients, name %s", children, nic->getName());
+        if (children == 0) {
+            LOG("loader: nothing matched the NIC, starting PS5SalinaGbE by hand");
+            PS5SalinaGbE *drv = OSTypeAlloc(PS5SalinaGbE);
+            if (drv && drv->init(nullptr) && drv->attach(nic)) {
+                if (!drv->start(nic)) { LOG("loader: start failed"); drv->detach(nic); }
+            } else LOG("loader: could not create the driver object");
+            if (drv) drv->release();
+        }
+        nic->release();
+        return;
+    }
+    LOG("loader: giving up");
+}

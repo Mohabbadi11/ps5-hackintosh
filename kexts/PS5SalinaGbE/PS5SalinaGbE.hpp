@@ -173,4 +173,13 @@ private:
     uint32_t lastTxHead = 0, lastTxTail = 0, lastRxHead = 0, lastLink = 0, lastIsrSeen = 0;
 };
 
+// Loads at boot with IOBSD (the PCI nub's own match is not guaranteed to happen): logs what it finds, and if nothing drove the NIC after a few
+// seconds starts PS5SalinaGbE on the nub by hand.
+class PS5SalinaGbELoader : public IOService {
+    OSDeclareDefaultStructors(PS5SalinaGbELoader)
+public:
+    virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+    static void worker(void *arg);
+};
+
 #endif
