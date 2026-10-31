@@ -75,7 +75,7 @@ for e in cfg["Kernel"]["Add"]:
 cfg["UEFI"]["Drivers"] = [{"Arguments": "", "Comment": d, "Enabled": True, "LoadEarly": False, "Path": d} for d in drivers]
 cfg["UEFI"]["Output"]["Resolution"] = "2560x1440"
 cfg["UEFI"]["Output"]["ProvideConsoleGop"] = True
-cfg["Misc"]["Debug"]["Target"] = 67              # enable | console | file
+cfg["Misc"]["Debug"]["Target"] = 87              # enable | console | data hub | NVRAM variable | file (the bare-metal boot cannot write the file; macOS reads the log from ioreg)
 if os.environ.get("OC_DEBUG") == "1":
     cfg["Misc"]["Debug"]["DisplayLevel"] = 0x80400042   # error | warn | info | verbose
 # The console has no SMBIOS memory tables, so boot.efi reports PhysicalMemorySize = 0 and XNU sizes its physical-memory window
