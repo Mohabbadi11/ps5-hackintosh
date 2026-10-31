@@ -12,7 +12,9 @@ systemctl stop hackintosh 2>/dev/null || true
 pkill -u ps5 sway || true
 sleep 2
 nohup python3 /root/kms_linear.py >/root/kms.log 2>&1 &
-sleep 25
+# wait for the picture to be on screen (a few seconds with the prepared welcome screen), not a fixed time
+for i in $(seq 1 120); do grep -q "SETCRTC done" /root/kms.log 2>/dev/null && break; sleep 0.5; done
+sleep 1
 tail -1 /root/kms.log
 # a tripwire kernel patch in the OpenCore config needs this boot's framebuffer offset
 [ -f /root/patch_tripwire.py ] && python3 /root/patch_tripwire.py /boot/efi/EFI/OC/config.plist || true

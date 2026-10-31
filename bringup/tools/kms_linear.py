@@ -152,25 +152,34 @@ def main():
     ioctl(fd, MAP_DUMB, mp)
     mm = mmap.mmap(fd, d.size, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=mp.offset)
 
-    # test pattern: 8 colour bars on the top third, a horizontal ramp, and a (x,y) code in the rest;
-    # row 0 starts with the signature pixels 0xDEADBE00+i
-    bars = [0xFFFFFFFF, 0xFFFFFF00, 0xFF00FFFF, 0xFF00FF00, 0xFFFF00FF, 0xFFFF0000, 0xFF0000FF, 0xFF000000]
-    pitch_px = d.pitch // 4
-    row = bytearray(d.pitch)
-    for y in range(H):
-        for x in range(W):
-            if y < H // 3:
-                v = bars[x * 8 // W]
-            elif y < 2 * H // 3:
-                g = x * 255 // (W - 1)
-                v = 0xFF000000 | (g << 16) | (g << 8) | g
-            else:
-                v = 0xFF000000 | ((x & 0xFF) << 8) | (y & 0xFF)
-            struct.pack_into("<I", row, x * 4, v)
-        if y == 0:
-            for i in range(8):
-                struct.pack_into("<I", row, i * 4, 0xDEADBE00 + i)
-        mm[y * d.pitch:(y + 1) * d.pitch] = bytes(row)
+    # Picture: the welcome screen prepared on the Mac (tools/make_welcome.py -> /root/welcome.raw, XRGB, pitch 10240) copied in one go;
+    # without it the old test pattern (8 colour bars, a ramp, an (x,y) code) painted pixel by pixel (slow). Either way row 0 starts with the
+    # signature pixels 0xDEADBE00+i, which stage 1 and patch_tripwire.py use to find the buffer in VRAM.
+    welcome = "/root/welcome.raw"
+    t0 = time.time()
+    if os.path.exists(welcome) and os.path.getsize(welcome) == d.pitch * H:
+        with open(welcome, "rb") as fh:
+            mm[0:d.pitch * H] = fh.read()
+        mm[0:32] = struct.pack("<8I", *[0xDEADBE00 + i for i in range(8)])
+        print(f"welcome screen copied in {time.time() - t0:.2f} s")
+    else:
+        bars = [0xFFFFFFFF, 0xFFFFFF00, 0xFF00FFFF, 0xFF00FF00, 0xFFFF00FF, 0xFFFF0000, 0xFF0000FF, 0xFF000000]
+        pitch_px = d.pitch // 4
+        row = bytearray(d.pitch)
+        for y in range(H):
+            for x in range(W):
+                if y < H // 3:
+                    v = bars[x * 8 // W]
+                elif y < 2 * H // 3:
+                    g = x * 255 // (W - 1)
+                    v = 0xFF000000 | (g << 16) | (g << 8) | g
+                else:
+                    v = 0xFF000000 | ((x & 0xFF) << 8) | (y & 0xFF)
+                struct.pack_into("<I", row, x * 4, v)
+            if y == 0:
+                for i in range(8):
+                    struct.pack_into("<I", row, i * 4, 0xDEADBE00 + i)
+            mm[y * d.pitch:(y + 1) * d.pitch] = bytes(row)
 
     sc = SetCrtc()
     conn_arr = u32s(1); conn_arr[0] = c.connector_id
