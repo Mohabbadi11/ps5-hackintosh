@@ -35,9 +35,9 @@ def _kernel_bytes(va, n):
 
 PITCH = 10240
 # KTTY=1 builds record, per LAPIC id, what the IER registers looked like before and after the fix, as two VRAM pixels per CPU in a spot the
-# console never draws on (bottom right: x=2000.., y=1380 before the fix, y=1381 after). bringup/ktty prints them when the panic text shows up.
+# console never draws on (bottom right: x=2000.., y=1430 before the fix, y=1431 after: row 89, below the 89 text rows). bringup/ktty prints them when the panic text shows up.
 PROBE = os.environ.get("KTTY") == "1"
-ROW_BEFORE, ROW_AFTER, PROBE_X = 1380, 1381, 2000
+ROW_BEFORE, ROW_AFTER, PROBE_X = 1430, 1431, 2000
 
 
 def probe_asm(row):

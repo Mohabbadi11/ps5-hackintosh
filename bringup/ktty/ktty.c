@@ -101,7 +101,7 @@ static void window(const char *tag)
 }
 
 /* Fired on the multi-CPU panic text ("NMIPI for unresponsive"): what the APIC IER looked like on every CPU when it started, before and after
- * the fix in tools/make_ierfix.py (each CPU leaves two pixels per row in VRAM, bottom right: x=2000.., y=1380 before, y=1381 after).
+ * the fix in tools/make_ierfix.py (each CPU leaves two pixels per row in VRAM, bottom right: x=2000.., y=1430 before, y=1431 after).
  * Pixel 0 = 0xA5000000 | LAPIC id << 8 | IERE, pixel 1 = IER6. A missing record ("--") means that CPU never ran the hook. */
 static void lapic_probe(void)
 {
@@ -110,7 +110,7 @@ static void lapic_probe(void)
         u32 v[4];
         for (u32 r = 0; r < 2; r++)
             for (u32 k = 0; k < 2; k++) {
-                out32(0x2000, (KTTY_FB_OFF + (1380u + r) * PITCH + 2000u * 4 + id * 8 + k * 4) | 0x80000000u);
+                out32(0x2000, (KTTY_FB_OFF + (1430u + r) * PITCH + 2000u * 4 + id * 8 + k * 4) | 0x80000000u);
                 v[r * 2 + k] = in32(0x2004);
             }
         kputs(" id "); khex(id, 2);
