@@ -133,12 +133,17 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 - **Acidanthera** (OpenCore, Lilu, VirtualSMC, RestrictEvents) and **AMD-OSX / AMD_Vanilla** (the base AMD kernel patches).
 - **EDK2** / TianoCore.
 - **The Linux `amdgpu` driver**: our reference for how this GPU actually behaves.
-- **ChefKiss (NootedRed)** and **amethyst8118 (MetalCyan, BC-250 EFI)** for proving RDNA 1 acceleration on macOS is a thing.
 - Everyone who ever posted a register dump on a forum at 3 a.m.
+
+## 🔗 Related work (read, not used)
+
+Nothing from these projects is copied or included here; they're the closest prior art we know of, and they shaped the GPU roadmap item.
+
+- [MetalCyan](https://github.com/amethyst8118/MetalCyan) (+ its EFI repo) by amethyst8118, built on [NootedRed](https://github.com/ChefKissInc/NootedRed) by ChefKiss: Metal acceleration for the ASRock BC-250 (same *Cyan Skillfish* family as the PS5's GPU) on macOS Tahoe.
 
 ## 📜 License
 
-No license file yet. Until there is one: look, learn, ask first. Third-party code keeps its own licenses (see `third_party/` and the upstream repos above). Note that some related projects (e.g. MetalCyan) use non-commercial licenses; nothing from them is copied here.
+No license file yet. Until there is one: look, learn, ask first. Third-party code keeps its own licenses (see `third_party/` and the upstream repos above).
 
 ---
 
