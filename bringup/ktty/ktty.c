@@ -7,7 +7,9 @@
  * 24-31 magic 0x5A. A missing magic means first call: nothing is cleared (the welcome screen stays); the per-row length table is zeroed.
  * Per-row text length (columns) lives in row 1438, one pixel per text row: a new line is blanked only as far as the text that was
  * there, so the log is a few black strips behind the text instead of a black sweep over the whole picture. The panic half is
- * blanked once, when the first "panic(" shows up.
+ * blanked once, when the first "panic(" shows up. KTTY_QUIET_UNITS: the log is drawn for that long after the first character, then only a
+ * panic is (WindowServer owns the picture by then, and the kernel keeps printing errors that would be painted over the desktop).
+ * The start time is the pixel (1, 1439), TSC >> 20.
  * Build: tools/make_ktty.py (clang -Os, flat binary, rewrites KTTY_FB_OFF with the boot's VRAM offset of the framebuffer). */
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -25,10 +27,14 @@ static volatile const u32 ktty_fb_off __attribute__((used)) = 0xDEADF00Du;
 #define PANIC_COLS  160u                   /* right half: everything from the first "panic(" on, so the dump is never overwritten */
 #define PANIC_X0    160u                   /* first column of the right half */
 #define ROWS        89u
+#ifndef KTTY_QUIET_UNITS
+#define KTTY_QUIET_UNITS 0u                /* after this many (TSC >> 20) units from the first character only panics are drawn; 0 = never */
+#endif
 #define FG          0xFFE0E0E0u
 #define BG          0xFF000000u
 
 static inline void out32(u16 port, u32 v) { __asm__ volatile("outl %0, %1" :: "a"(v), "Nd"(port)); }
+static inline u64 rdtsc(void) { u32 lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi)); return ((u64)hi << 32) | lo; }
 static inline u32 in32(u16 port) { u32 v; __asm__ volatile("inl %1, %0" : "=a"(v) : "Nd"(port)); return v; }
 static inline void px(u32 off, u32 colour) { out32(0x2000, off | 0x80000000u); out32(0x2004, colour); }
 
@@ -233,8 +239,14 @@ static void kch(u8 c)
     if ((st >> 24) != 0x5A) {
         for (u32 r = 0; r < ROWS; r++) rowlen_set(r, 0);
         st = 0x5A000000u;
+        px(state_off + 4, (u32)(rdtsc() >> 20));
     }
     u32 col = st & 0x1FF, row = (st >> 9) & 0x7F, wrapped = (st >> 16) & 1, pmode = (st >> 17) & 1, midx = (st >> 18) & 7;
+    int quiet = 0;
+    if (KTTY_QUIET_UNITS && !pmode) {
+        out32(0x2000, (state_off + 4) | 0x80000000u);
+        quiet = (u32)(rdtsc() >> 20) - in32(0x2004) > KTTY_QUIET_UNITS;
+    }
 
     if (!pmode) {                                       /* watch for "panic(": from there on write into the right half */
         if (c == pat[midx]) midx++;
@@ -245,6 +257,7 @@ static void kch(u8 c)
             for (u32 i = 0; i < 6; i++) glyph(PANIC_X0 + col++, row, pat[i]);
             goto store;
         }
+        if (quiet) goto store;
     }
     u32 xoff = pmode ? PANIC_X0 : 0, width = pmode ? PANIC_COLS : RING_COLS;
     int newline = 0;
