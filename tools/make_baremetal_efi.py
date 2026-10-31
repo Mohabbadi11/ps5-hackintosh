@@ -62,6 +62,11 @@ _g = cfg["PlatformInfo"]["Generic"]
 _g["SystemSerialNumber"], _g["MLB"], _g["SystemUUID"], _g["ROM"] = _id["SMBIOS_SERIAL"], _id["SMBIOS_MLB"], _id["SMBIOS_UUID"], bytes.fromhex(_id["SMBIOS_ROM"])
 cfg["Kernel"]["Add"] = [kext_entry("Lilu.kext"), kext_entry("VirtualSMC.kext"), kext_entry("SMCProcessor.kext"),
                         kext_entry("RestrictEvents.kext")]
+# our own Ethernet kext (tools/build_kext.sh builds it); GBE=0 leaves it out
+_gbe = ROOT / "build/kexts/PS5SalinaGbE.kext"
+if _gbe.exists() and os.environ.get("GBE") != "0":
+    shutil.copytree(_gbe, OUT / "OC/Kexts/PS5SalinaGbE.kext")
+    cfg["Kernel"]["Add"].append(kext_entry("PS5SalinaGbE.kext"))
 # SMCProcessor lives inside the VirtualSMC release but is a separate bundle; fix its executable path when needed
 for e in cfg["Kernel"]["Add"]:
     stem = e["BundlePath"][:-5]

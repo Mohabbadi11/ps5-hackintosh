@@ -35,5 +35,7 @@ sync
 echo 1 > /proc/sys/kernel/sysrq
 # the CPU that takes the crash becomes the one running UEFI and macOS: it has to be the boot processor (CPU 0), because XNU
 # panics with "Unexpected local APIC state" in lapic_init() on any other core (IA32_APIC_BASE.BSP clear)
-nohup taskset -c 0 sh -c "sleep 1; echo c > /proc/sysrq-trigger" >/dev/null 2>&1 &
+# Sony's GbE (104d:9104) keeps its DMA rings armed through a crash and the IOMMU is switched off afterwards: its ring addresses would
+# become physical addresses inside macOS' memory. Linux's mts driver stops both DMA engines on "ip link set down" (this ends the ssh session).
+nohup taskset -c 0 sh -c 'sleep 1; for n in /sys/class/net/*; do [ "$(cat $n/device/vendor 2>/dev/null)" = 0x104d ] && ip link set "${n##*/}" down; done; echo c > /proc/sysrq-trigger' >/dev/null 2>&1 &
 echo "crashing into the stage in 1 s"
