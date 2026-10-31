@@ -186,6 +186,11 @@ if os.environ.get("CACHEFIX", "1") != "0":
     sys.path.insert(0, str(ROOT / "tools"))
     import make_cachefix
     cfg["Kernel"]["Patch"] = make_cachefix.patches() + cfg["Kernel"]["Patch"]
+# pmtelemetry (Intel package power telemetry) shows up in the backtrace of every multi-CPU panic: it asks all CPUs, through mp_cpus_call, to read
+# Intel-only MSRs, which do not exist here. Useless on AMD: make it fail to start. PMTELEMETRY=1 keeps it.
+if os.environ.get("PMTELEMETRY", "0") != "1":
+    cfg["Kernel"]["Block"].append({"Arch": "Any", "Comment": "Intel power telemetry: cross-calls to Intel-only MSRs", "Enabled": True,
+                                    "Identifier": "com.apple.driver.pmtelemetry", "MaxKernel": "", "MinKernel": "", "Strategy": "Disable"})
 # AMD's APIC interrupt-enable registers (tools/make_ierfix.py): without this no interrupt reaches the core. IERFIX=0 leaves them.
 if os.environ.get("IERFIX", "1") != "0":
     sys.path.insert(0, str(ROOT / "tools"))
