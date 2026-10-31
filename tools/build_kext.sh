@@ -12,6 +12,10 @@ xcrun clang++ -arch x86_64 -mmacosx-version-min=12.0 -isysroot "$SDK" -std=c++17
     -fno-builtin -fno-rtti -fno-exceptions -fno-common -fapple-kext -mkernel -nostdlibinc \
     -I"$KH" -I"$KH/libkern/c++" -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
     -c "$SRC/PS5SalinaGbE.cpp" -o "$OUT/../PS5SalinaGbE.o"
+xcrun clang++ -arch x86_64 -mmacosx-version-min=12.0 -isysroot "$SDK" -std=c++17 -O2 -fno-builtin -fno-rtti -fno-exceptions -fno-common -fapple-kext -mkernel \
+    -nostdlibinc -I"$KH" -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT -c "$SRC/kmod.cpp" -o "$OUT/../kmod.o"
 xcrun ld -arch x86_64 -kext -static -no_data_const -macos_version_min 12.0 -syslibroot "$SDK" \
-    -o "$OUT/Contents/MacOS/PS5SalinaGbE" "$OUT/../PS5SalinaGbE.o" -lkmod -lkmodc++
+    -o "$OUT/Contents/MacOS/PS5SalinaGbE" "$OUT/../PS5SalinaGbE.o" "$OUT/../kmod.o" -lkmod -lkmodc++
+# a kext without kmod_info is silently skipped by the prelinker
+nm "$OUT/Contents/MacOS/PS5SalinaGbE" | grep -q " _kmod_info" || { echo "no kmod_info in the kext" >&2; exit 1; }
 echo "built $OUT"

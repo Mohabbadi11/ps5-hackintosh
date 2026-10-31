@@ -79,6 +79,8 @@ public:
     virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
     virtual void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
     virtual void free() APPLE_KEXT_OVERRIDE;
+    virtual bool createWorkLoop() APPLE_KEXT_OVERRIDE;
+    virtual IOWorkLoop *getWorkLoop() const APPLE_KEXT_OVERRIDE;
 
     virtual IOReturn enable(IONetworkInterface *netif) APPLE_KEXT_OVERRIDE;
     virtual IOReturn disable(IONetworkInterface *netif) APPLE_KEXT_OVERRIDE;
@@ -119,6 +121,8 @@ private:
     void writeMac();
     void lsoRecover();
     void linkCheck(bool force);
+    void txTimeout();
+    void status(bool force);
 
     // phy (mts_phy.c)
     int smiWait();
@@ -146,13 +150,13 @@ private:
     IOPCIDevice *pci = nullptr, *glue = nullptr;
     IOMemoryMap *regMap = nullptr, *glueMap = nullptr;
     volatile uint8_t *regs = nullptr, *glueRegs = nullptr;
-    IOWorkLoop *workLoop = nullptr;
+    IOWorkLoop *ownLoop = nullptr;
     IOTimerEventSource *timer = nullptr;
     IOEthernetInterface *netif = nullptr;
     IOBasicOutputQueue *outQueue = nullptr;
     IOSimpleLock *lock = nullptr;
     OSDictionary *mediumDict = nullptr;
-    const IONetworkMedium *autoMedium = nullptr;
+    const IONetworkMedium *autoMedium = nullptr;     // the 1000BaseT-FD entry of mediumDict, reported as the active medium
 
     IOBufferMemoryDescriptor *txRingMd = nullptr, *rxRingMd = nullptr, *txScratchMd = nullptr, *rxPoolMd = nullptr;
     GbeDesc *txRing = nullptr, *rxRing = nullptr;
@@ -164,7 +168,9 @@ private:
     uint32_t chipId = 0, chipRev = 0;
     bool running = false, linkUp = false;
     uint32_t pollTick = 0;
-    uint32_t dbgTx = 0, dbgRx = 0;
+    uint32_t dbgTx = 0, dbgRx = 0, dbgTxDone = 0, errLogs = 0, lsoLogs = 0, smiTimeouts = 0;
+    uint32_t isrSeen = 0, txTailSeen = 0, txStuck = 0, txOk = 0, txDrop = 0, txStall = 0, rxOk = 0, rxBad = 0, rxNoMem = 0;
+    uint32_t lastTxHead = 0, lastTxTail = 0, lastRxHead = 0, lastLink = 0, lastIsrSeen = 0;
 };
 
 #endif
