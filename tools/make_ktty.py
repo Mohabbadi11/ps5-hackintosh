@@ -40,7 +40,7 @@ def build_blob():
         obj, elf, binf = f"{td}/k.o", f"{td}/k.elf", f"{td}/k.bin"
         subprocess.check_call([f"{LLVM}/clang", "-target", "x86_64-unknown-none-elf", "-ffreestanding", "-fno-stack-protector",
                                "-mno-red-zone", "-mno-sse", "-mno-mmx", "-mno-avx", "-fPIE", "-fno-builtin", "-Os",
-                               "-fvisibility=hidden", f"-DKTTY_HALT_DELTA={halt_delta()}", f"-DKTTY_LAPIC_DELTA={LAPIC_VBASE - _main_addr()}", f"-DKTTY_PESTATE_DELTA={_symbols()['_PE_state'] - _main_addr()}", f"-DKTTY_VINFO_DELTA={_symbols()['_vinfo'] - _main_addr()}"] + ([f'-DKTTY_RETURN_PAT="{os.environ["KTTY_RETURN"]}"'] if os.environ.get("KTTY_RETURN") else []) +
+                               "-fvisibility=hidden", f"-DKTTY_HALT_DELTA={halt_delta()}", f"-DKTTY_LAPIC_DELTA={LAPIC_VBASE - _main_addr()}", f"-DKTTY_PESTATE_DELTA={_symbols()['_PE_state'] - _main_addr()}", f"-DKTTY_VINFO_DELTA={_symbols()['_vinfo'] - _main_addr()}"] + [f"-DKTTY_{n}_DELTA={_symbols()['_' + sym] - _main_addr()}" for n, sym in (("CPUPTR", "cpu_data_ptr"), ("PSETNODE", "pset_node0"), ("PSET0", "pset0"), ("PKGS", "x86_pkgs"))] + ([f'-DKTTY_RETURN_PAT="{os.environ["KTTY_RETURN"]}"'] if os.environ.get("KTTY_RETURN") else []) +
                               ([f'-DKTTY_DUMP_PAT="{os.environ["KTTY_DUMP"]}"'] if os.environ.get("KTTY_DUMP") else []) +
                               ["-c", str(ROOT / "bringup/ktty/ktty.c"), "-o", obj])
         Path(f"{td}/l.ld").write_text("ENTRY(ktty_main)\nSECTIONS { . = 0; .text : { *(.text.entry) *(.text .text.*) } "

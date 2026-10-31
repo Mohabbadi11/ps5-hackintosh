@@ -100,22 +100,39 @@ static void window(const char *tag)
     dump_lapic(" ->");
 }
 
-static void qdump(const char *tag, long delta, int n)
+static volatile u64 *kaddr(long delta)
 {
     volatile u64 *p;
     __asm__ volatile("lea ktty_main(%%rip), %0\n\tadd %1, %0" : "=&r"(p) : "er"(delta));
+    return p;
+}
+
+static void qd(const char *tag, volatile u64 *p, int n)
+{
     kputs(tag);
     for (int i = 0; i < n; i++) { if ((i & 3) == 0) kch('\n'); kch(' '); khex(p[i], 16); }
     kch('\n');
 }
 
-/* What boot.efi told XNU about the screen (the display is the open problem), and the interrupt-enable state the fix left. */
+static int kptr(u64 v) { return v >= 0xffffff0000000000ull; }
+
+/* Fired on the text of the multi-CPU panic ("Ticket spinlock"): what do CPU 0 and CPU 1 look like? cpu_data_ptr[], both cpu_data
+ * (raw: cpu_this, active thread, cpu_number, int state, signals, running...), pset_node0, pset0 (its sched_lock is at +0x100, the
+ * same place the panic's lock lives in the second pset), and the x86 package list. */
 static void lapic_probe(void)
 {
-    volatile u32 *l = lapic_base();
-    kputs("\nPROBE iere "); khex(l[0x410 / 4], 8); kputs(" ier6 "); khex(l[0x4E0 / 4], 8); kch('\n');
-    qdump("PE_state (init, then video: base display rowbytes w h depth ...)", KTTY_PESTATE_DELTA, 12);
-    qdump("vinfo (h w depth rowbytes base ...)", KTTY_VINFO_DELTA, 8);
+    volatile u64 *cpd = kaddr(KTTY_CPUPTR_DELTA);
+    kputs("\nCPUS");
+    qd(" cpu_data_ptr[0..3]", cpd, 4);
+    if (kptr(cpd[0])) qd(" cpu0 data", (volatile u64 *)cpd[0], 16);
+    if (kptr(cpd[1])) qd(" cpu1 data", (volatile u64 *)cpd[1], 16);
+    qd(" pset_node0", kaddr(KTTY_PSETNODE_DELTA), 8);
+    volatile u64 *ps0 = kaddr(KTTY_PSET0_DELTA);
+    qd(" pset0", ps0, 8);
+    qd(" pset0+0xf0", ps0 + 0x1e, 4);
+    volatile u64 *pk = kaddr(KTTY_PKGS_DELTA);
+    qd(" x86_pkgs", pk, 2);
+    if (kptr(pk[0])) qd(" pkg0", (volatile u64 *)pk[0], 8);
 }
 #endif
 
