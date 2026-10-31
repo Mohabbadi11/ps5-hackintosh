@@ -12,10 +12,10 @@ Patch for the Monterey KC (21.6.0), as OpenCore Kernel>Patch entries (prints not
   _nfs4_parsefattr (dead NFSv4 code)                                      -> stub 1 at +0, stub 2 at +0x80: IER fix, the displaced instructions, jmp back
 IER registers only accept writes while IERE is set, so the fix is: if IERE then IER0..7 = 0xFFFFFFFF.
 
-(2) Performance counters left running by Linux (hypothesis under test). Linux's hard-lockup detector keeps a core PMC counting with an overflow
+(2) Performance counters left running by Linux. Linux's hard-lockup detector keeps a core PMC counting with an overflow
 interrupt; the crash kexec does not stop it. On a multi-CPU boot an AP ends up with PPR 0xD0 while ISR reads empty and IRR holds 0xDD (timer) and
-0xDE (IPI); an EOI clears the PPR. A perf-counter overflow (LVT vector in XNU's 0xD0 class) that never gets its EOI would look exactly like that.
-The fix zeroes the six Zen 2 core PerfCtl MSRs (0xC0010200, +2 ... 0xC001020A) at the start of both hooks; KTTY builds also record what PerfCtl0
+0xDE (IPI); an EOI clears the PPR. A perf-counter overflow (LVT vector in XNU's 0xD0 class) that never gets its EOI would look exactly like that: zeroing
+the counters made cpus=16 stable (9 minutes under load). The fix zeroes the six Zen 2 core PerfCtl MSRs (0xC0010200, +2 ... 0xC001020A) at the start of both hooks; KTTY builds also record what PerfCtl0
 held on each CPU before the fix."""
 import os, struct, subprocess, tempfile
 from pathlib import Path

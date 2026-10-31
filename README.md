@@ -13,7 +13,7 @@
                   macOS 12.7.6 on an AMD "Oberon" SoC.
 ```
 
-**Status: it boots to a stable desktop with keyboard, mouse and trackpad.** It's slow because there's no GPU acceleration yet (more on that below), and it only knows how to be a computer after a very specific ritual. Details, receipts and a lot of bit-twiddling below.
+**Status: it boots to a stable desktop on all 16 threads, with keyboard, mouse and trackpad.** It's slow because there's no GPU acceleration yet (more on that below), and it only knows how to be a computer after a very specific ritual. Details, receipts and a lot of bit-twiddling below.
 
 ---
 
@@ -21,7 +21,7 @@
 
 | | Status | Notes |
 |---|---|---|
-| 🧠 CPU | ✅ 2 threads, 🧪 16 in testing | 8 Zen 2 cores / 16 threads. The multi-core deadlock was *a cache-topology bug*, see below |
+| 🧠 CPU | ✅ 16 threads | 8 Zen 2 cores / 16 threads. Two bugs stood in the way: a cache-topology deadlock and a performance counter Linux leaves running, see below |
 | 🖥️ Display | ✅ | 2560×1440, WindowServer on the firmware framebuffer. **No hardware acceleration** (yet) |
 | ⌨️🖱️ USB input | ✅ | Keyboard, mouse, trackpad (even the scroll) |
 | 💾 USB storage | ✅ | Boot disk is a USB SSD (APFS). The AMD xHCI behaves once the clocks are right |
@@ -43,7 +43,8 @@ This console has **no UART**. No serial port, no debug header, nothing. When it 
 3. **The 1 GHz lie.** OpenCore told XNU the TSC runs at 1 GHz. It runs at 1596.3 MHz. Every timeout in the kernel was ~37 % too short, so the USB 3 controller's power-up timed out *before it was ready*. The boot only worked at all when interrupts were *broken* (funny how that goes). We now overwrite the clock globals at the end of `tsc_init`.
 4. **The framebuffer wants to live in a PCI BAR.** macOS' stock display driver (`IONDRVFramebuffer`) only accepts a boot framebuffer that sits inside one of the GPU's BARs. Ours sat in the middle of Sony's carve-out. So Linux (before we jump to UEFI) fills VRAM top-down until the picture lands in the first 256 MB, and our stage tells UEFI "the screen is at BAR0 + offset". WindowServer, finally: *oh, that's what you meant.*
 5. **cpus=2 deadlocked in the scheduler.** A thread was waiting for a lock it already held. Root cause: on AMD there's no Intel CPUID leaf 4, so XNU decided every logical CPU has **its own private cache**, so every logical CPU got **its own processor set**, so the scheduler ended up in a state it can't recover from. We now tell XNU what a Zen 2 cache hierarchy looks like (L1/L2 shared by 2 threads, L3 per CCX) and the problem goes away.
-6. **Own goal of the year.** Our debug console lived in kernel code that looked unused. `launchd` called `auditon`, jumped into our *font data*, and… yeah. It now lives in dead NFSv4 code, which this boot never runs. (Hey, a console with no network. Fits.)
+6. **The interrupt that never ended.** With more than two threads the kernel died after 10–30 s, always on a different core: IPIs and TLB flushes just stopped being delivered. The stuck core had a processor priority of `0xD0` with nothing in service and the timer and IPI vectors waiting; one EOI write cleared it. Linux's hard-lockup detector keeps a hardware performance counter armed, the crash-kexec doesn't stop it, and XNU doesn't expect that interrupt. Our best explanation is that its overflow vector was left "in service" and blocked everything below it. Zeroing the PMC control registers on every core before XNU takes interrupts made 16 threads stable (9 minutes under load, no panic).
+7. **Own goal of the year.** Our debug console lived in kernel code that looked unused. `launchd` called `auditon`, jumped into our *font data*, and… yeah. It now lives in dead NFSv4 code, which this boot never runs. (Hey, a console with no network. Fits.)
 
 > **Method:** built with AI pair-programming. Every fix above came from *measure → hypothesis → one boot → photo of the TV → repeat*. About 120 commits, zero serial cables.
 
@@ -86,7 +87,7 @@ All of these are OpenCore `Kernel > Patch` entries, built by `tools/make_baremet
 
 | Patch | Why |
 |---|---|
-| `tools/make_ierfix.py` | Open AMD's APIC IER vectors in `_lapic_configure` (runs on every CPU) |
+| `tools/make_ierfix.py` | On every CPU: open AMD's APIC IER vectors and stop the performance counters Linux left running |
 | `tools/make_tscfix.py` | TSC 1596.3 MHz, bus = TSC/64 (the real LAPIC timer is ~25 MHz) |
 | `tools/make_cachefix.py` | Zen 2 cores/caches for XNU, one pset per CCX instead of per thread |
 | topology divisions | `_cpu_thread_alloc` otherwise divides by zero on AMD |
@@ -127,7 +128,7 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 - [x] Interrupts, clocks, USB boot disk
 - [x] Stable desktop with input
 - [x] More than one CPU thread
-- [ ] 8 cores / 16 threads (testing)
+- [x] 8 cores / 16 threads
 - [ ] Clean shutdown / restart
 - [ ] USB Ethernet / audio / Bluetooth dongles
 - [ ] Cosmetics: *About This Mac* says 1 GHz and "DDR4" (the PS5 has 16 GB of **GDDR6**, we know)
