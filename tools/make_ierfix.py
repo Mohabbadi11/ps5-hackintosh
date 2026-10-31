@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""AMD's extended APIC interrupt-enable registers (IERE, 0x410 bit 0, and IER0..7 at 0x480+16*n) come up set with almost every vector
+"""Two fixes that both have to run on every CPU, before it takes interrupts (hooks below).
+
+(1) AMD's extended APIC interrupt-enable registers (IERE, 0x410 bit 0, and IER0..7 at 0x480+16*n) come up set with almost every vector
 masked (IER6 = 0x1f): XNU's timer vector 0xDD and every IPI sit in IRR and are never delivered. Linux finds IERE off and all of IER on.
 XNU does not know these registers, so open them at the start of `_lapic_configure` (BSP only: i386_init, i386_smp_init, wake from sleep) and at the
 start of `_lapic_init_slave` (every AP, called from _vstart); an AP that keeps the closed IER ignores IPIs (TLB shootdown timeouts at cpus>1).
@@ -8,7 +10,13 @@ Patch for the Monterey KC (21.6.0), as OpenCore Kernel>Patch entries (prints not
   _lapic_configure (push rbp; mov rbp,rsp; push r14 = 6 bytes)          -> jmp stub 1
   _lapic_init_slave (push rbp; mov rbp,rsp; mov ecx,0x1b = 9 bytes)       -> jmp stub 2
   _nfs4_parsefattr (dead NFSv4 code)                                      -> stub 1 at +0, stub 2 at +0x80: IER fix, the displaced instructions, jmp back
-IER registers only accept writes while IERE is set, so the fix is: if IERE then IER0..7 = 0xFFFFFFFF."""
+IER registers only accept writes while IERE is set, so the fix is: if IERE then IER0..7 = 0xFFFFFFFF.
+
+(2) Performance counters left running by Linux (hypothesis under test). Linux's hard-lockup detector keeps a core PMC counting with an overflow
+interrupt; the crash kexec does not stop it. On a multi-CPU boot an AP ends up with PPR 0xD0 while ISR reads empty and IRR holds 0xDD (timer) and
+0xDE (IPI); an EOI clears the PPR. A perf-counter overflow (LVT vector in XNU's 0xD0 class) that never gets its EOI would look exactly like that.
+The fix zeroes the six Zen 2 core PerfCtl MSRs (0xC0010200, +2 ... 0xC001020A) at the start of both hooks; KTTY builds also record what PerfCtl0
+held on each CPU before the fix."""
 import os, struct, subprocess, tempfile
 from pathlib import Path
 
@@ -38,6 +46,7 @@ PITCH = 10240
 # console never draws on (bottom right: x=2000.., y=1430 before the fix, y=1431 after: row 89, below the 89 text rows). bringup/ktty prints them when the panic text shows up.
 PROBE = os.environ.get("KTTY") == "1"
 ROW_BEFORE, ROW_AFTER, PROBE_X = 1430, 1431, 2000
+ROW_PMC = 1432                                   # PerfCtl0 (low dword) as this CPU found it, before the fix zeroes it
 
 
 def probe_asm(row):
@@ -54,8 +63,24 @@ def probe_asm(row):
             "    movw $0x2004, %dx", "    outl %eax, %dx", "    popq %rax"]
 
 
+def pmc_asm():
+    lines = []
+    if PROBE:
+        off = ROW_PMC * PITCH + PROBE_X * 4
+        lines += ["    movl $0xC0010200, %ecx", "    rdmsr", "    movl %eax, %r9d",
+                  "    movq lapic_vbase(%rip), %r8", "    testq %r8, %r8", "    jz 3f",
+                  "    movl 0x20(%r8), %r10d", "    shrl $24, %r10d", "    andl $15, %r10d", "    shll $3, %r10d",
+                  "    addl $0xDEADF00D, %r10d", f"    addl ${off}, %r10d", "    orl $0x80000000, %r10d",
+                  "    movw $0x2000, %dx", "    movl %r10d, %eax", "    outl %eax, %dx",
+                  "    movw $0x2004, %dx", "    movl %r9d, %eax", "    outl %eax, %dx", "3:"]
+    lines += ["    xorl %eax, %eax", "    xorl %edx, %edx"]
+    for i in range(6):
+        lines += [f"    movl ${0xC0010200 + 2 * i:#x}, %ecx", "    wrmsr"]
+    return lines
+
+
 def build_stub(stub_va, back_va, displaced):
-    lines = [".code64", ".globl stub", "stub:",
+    lines = [".code64", ".globl stub", "stub:", *pmc_asm(),
              "    movq lapic_vbase(%rip), %rax", "    testq %rax, %rax", "    jz 1f"]
     if PROBE:
         lines += probe_asm(ROW_BEFORE)

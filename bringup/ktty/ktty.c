@@ -162,7 +162,8 @@ static void lapic_probe(void)
         kputs(" id "); khex(id, 2);
         if ((v[0] >> 24) != 0xA5 || ((v[0] >> 8) & 0xFF) != id) { kputs(" --\n"); continue; }
         kputs("  before "); khex(v[0] & 1, 1); kch(' '); khex(v[1], 8);
-        kputs("  after "); khex(v[2] & 1, 1); kch(' '); khex(v[3], 8); kch('\n');
+        kputs("  after "); khex(v[2] & 1, 1); kch(' '); khex(v[3], 8);
+        kputs("  perfctl0 was "); khex(vget(1432u, 2000u + id * 2), 8); kch('\n');
     }
 }
 #endif
