@@ -20,29 +20,14 @@
 	<string>0.1</string>
 	<key>IOKitPersonalities</key>
 	<dict>
-		<key>PS5SalinaGbELoader</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>local.ps5.driver.PS5SalinaGbE</string>
-			<key>IOClass</key>
-			<string>PS5SalinaGbELoader</string>
-			<key>IOMatchCategory</key>
-			<string>PS5SalinaGbELoader</string>
-			<key>IOProviderClass</key>
-			<string>IOResources</string>
-			<key>IOResourceMatch</key>
-			<string>IOBSD</string>
-		</dict>
 		<key>PS5SalinaGbE</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>local.ps5.driver.PS5SalinaGbE</string>
 			<key>IOClass</key>
 			<string>PS5SalinaGbE</string>
-			<key>IOPCIMatch</key>
+			<key>IOPCIPrimaryMatch</key>
 			<string>0x9104104d</string>
-			<key>IOProbeScore</key>
-			<integer>1000</integer>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>

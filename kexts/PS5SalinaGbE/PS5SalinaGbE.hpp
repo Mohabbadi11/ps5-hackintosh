@@ -32,7 +32,7 @@
 #define GBE_REG_TX_RING_BASE 0x44
 #define GBE_REG_RX_RING_BASE 0x48
 #define GBE_REG_ISR          0x50
-#define GBE_REG_IER          0x54
+#define GBE_REG_IMR          0x54            // interrupt MASK: a set bit masks that source
 #define GBE_REG_SERDES       0x74
 #define GBE_REG_RX_PCODE     0x78
 #define GBE_REG_TXKICK       0x9c
@@ -44,7 +44,7 @@
 #define GBE_CLK_ENABLE       0x7597c00
 #define GBE_SERDES_1G        0x303277
 #define GBE_COAL_VAL         0x10001388
-#define GBE_IER_MASK         0x5014fa
+#define GBE_IMR_ALL          0x7fffff        // every source masked: the datapath is polled
 #define GBE_ISR_ERRORS       0x7be600
 #define GBE_ISR_LSO_RECOVER  0x500000
 
@@ -107,6 +107,8 @@ private:
     // setup
     IOPCIDevice *findGlue();
     bool allocDma(IOBufferMemoryDescriptor **md, size_t size, void **va, uint32_t *pa);
+    void deferredInit();
+    static void initTimerFired(OSObject *owner, IOTimerEventSource *t);
     bool allocRings();
     void freeRings();
     void dumpRegs();
@@ -151,7 +153,7 @@ private:
     IOMemoryMap *regMap = nullptr, *glueMap = nullptr;
     volatile uint8_t *regs = nullptr, *glueRegs = nullptr;
     IOWorkLoop *ownLoop = nullptr;
-    IOTimerEventSource *timer = nullptr;
+    IOTimerEventSource *timer = nullptr, *initTimer = nullptr;
     IOEthernetInterface *netif = nullptr;
     IOBasicOutputQueue *outQueue = nullptr;
     IOSimpleLock *lock = nullptr;
@@ -171,15 +173,6 @@ private:
     uint32_t dbgTx = 0, dbgRx = 0, dbgTxDone = 0, errLogs = 0, lsoLogs = 0, smiTimeouts = 0;
     uint32_t isrSeen = 0, txTailSeen = 0, txStuck = 0, txOk = 0, txDrop = 0, txStall = 0, rxOk = 0, rxBad = 0, rxNoMem = 0;
     uint32_t lastTxHead = 0, lastTxTail = 0, lastRxHead = 0, lastLink = 0, lastIsrSeen = 0;
-};
-
-// Loads at boot with IOBSD (the PCI nub's own match is not guaranteed to happen): logs what it finds, and if nothing drove the NIC after a few
-// seconds starts PS5SalinaGbE on the nub by hand.
-class PS5SalinaGbELoader : public IOService {
-    OSDeclareDefaultStructors(PS5SalinaGbELoader)
-public:
-    virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
-    static void worker(void *arg);
 };
 
 #endif

@@ -93,49 +93,71 @@ void PS5SalinaGbE::dumpRegs()
     LOG("regs 30 %08x 34 %08x 38 %08x 44 %08x 48 %08x 50 %08x 54 %08x ac %08x", rd(0x30), rd(0x34), rd(0x38), rd(0x44), rd(0x48), rd(0x50), rd(0x54), rd(0xac));
 }
 
+// Nothing heavy here: start() runs while IOKit is still looking for the root disk. Only config-space checks; the hardware is touched by
+// deferredInit(), a one-shot timer some seconds later.
+#define GBE_INIT_DELAY_MS 45000
+
 bool PS5SalinaGbE::start(IOService *provider)
 {
     if (!super::start(provider)) return false;
     pci = OSDynamicCast(IOPCIDevice, provider);
     if (!pci) return false;
-    LOG("start: %02x:%02x.%x vendor %04x device %04x", pci->getBusNumber(), pci->getDeviceNumber(), pci->getFunctionNumber(),
-        pci->configRead16(kIOPCIConfigVendorID), pci->configRead16(kIOPCIConfigDeviceID));
+    uint16_t vid = pci->configRead16(kIOPCIConfigVendorID), did = pci->configRead16(kIOPCIConfigDeviceID);
+    LOG("start: %02x:%02x.%x vendor %04x device %04x", pci->getBusNumber(), pci->getDeviceNumber(), pci->getFunctionNumber(), vid, did);
+    if (vid != 0x104d || did != 0x9104) { LOG("not the Salina GbE, leaving it alone"); return false; }
     pci->retain();
     if (!pci->open(this)) { LOG("cannot open the PCI device"); return false; }
     LOG("pci command %04x status %04x", pci->configRead16(kIOPCIConfigCommand), pci->configRead16(kIOPCIConfigStatus));
-    pci->setMemoryEnable(true);
-
-    // MSI: the stage that boots macOS already cleared the enable bit; make sure (the datapath is polled)
-    {
-        uint8_t off = 0;
-        if (pci->findPCICapability(kIOPCIMSICapability, &off)) {
-            uint16_t ctl = pci->configRead16(off + 2);
-            LOG("MSI control %04x", ctl);
-            if (ctl & 1) pci->configWrite16(off + 2, ctl & ~1);
-        }
+    pci->setBusMasterEnable(false);                          // Linux left it on, with rings armed: no DMA until enable()
+    uint8_t off = 0;
+    if (pci->findPCICapability(kIOPCIMSICapability, &off)) {
+        uint16_t ctl = pci->configRead16(off + 2);
+        LOG("MSI control %04x", ctl);
+        if (ctl & 1) pci->configWrite16(off + 2, ctl & ~1);  // polled datapath
     }
 
+    initTimer = IOTimerEventSource::timerEventSource(this, (IOTimerEventSource::Action)&PS5SalinaGbE::initTimerFired);
+    timer = IOTimerEventSource::timerEventSource(this, (IOTimerEventSource::Action)&PS5SalinaGbE::pollTimer);
+    if (!initTimer || !timer || ownLoop->addEventSource(initTimer) != kIOReturnSuccess || ownLoop->addEventSource(timer) != kIOReturnSuccess) {
+        pci->close(this);
+        return false;
+    }
+    initTimer->setTimeoutMS(GBE_INIT_DELAY_MS);
+    LOG("started; hardware init in %d s", GBE_INIT_DELAY_MS / 1000);
+    return true;
+}
+
+void PS5SalinaGbE::initTimerFired(OSObject *owner, IOTimerEventSource *)
+{
+    PS5SalinaGbE *self = OSDynamicCast(PS5SalinaGbE, owner);
+    if (self) self->deferredInit();
+}
+
+void PS5SalinaGbE::deferredInit()
+{
+    LOG("deferred init");
+    pci->setMemoryEnable(true);
     regMap = pci->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
-    if (!regMap || regMap->getLength() < 0x208) { LOG("BAR0 map failed or too small"); return false; }
+    if (!regMap || regMap->getLength() < 0x208) { LOG("BAR0 map failed or too small"); return; }
     regs = (volatile uint8_t *)regMap->getVirtualAddress();
     LOG("BAR0 at phys %llx, %llu bytes", (unsigned long long)regMap->getPhysicalAddress(), (unsigned long long)regMap->getLength());
 
-    // Linux left the chip running with its rings armed: stop it before anything else (the PCI bus-master bit stays as it is until enable())
-    LOG("DMA state as found: tx ctl %08x rx ctl %08x tx base %08x cur %08x rx base %08x cur %08x ier %08x isr %08x", rd(0x34), rd(0x38), rd(0x44), rd(0x3c), rd(0x48), rd(0x40), rd(0x54), rd(0x50));
+    // Linux left the chip running with its rings armed: mask and stop it (no reset here)
+    LOG("DMA state as found: tx ctl %08x rx ctl %08x tx base %08x cur %08x rx base %08x cur %08x imr %08x isr %08x", rd(0x34), rd(0x38), rd(0x44), rd(0x3c), rd(0x48), rd(0x40), rd(0x54), rd(0x50));
     stopDma();
-    hwReset();
-    LOG("DMA state after stop+reset: tx ctl %08x rx ctl %08x tx base %08x rx base %08x ier %08x", rd(0x34), rd(0x38), rd(0x44), rd(0x48), rd(0x54));
+    wr(GBE_REG_ISR, rd(GBE_REG_ISR));
+    LOG("DMA state after stop: tx ctl %08x rx ctl %08x imr %08x", rd(0x34), rd(0x38), rd(0x54));
 
     glue = nullptr;
     for (int tries = 0; tries < 10 && !glue; tries++) {
         glue = findGlue();
         if (!glue) IOSleep(100);
     }
-    if (!glue) { LOG("glue function 104d:9107 not found"); return false; }
+    if (!glue) { LOG("glue function 104d:9107 not found"); return; }
     glue->retain();
     LOG("glue command %04x, PMCSR power state D%d", glue->configRead16(kIOPCIConfigCommand), 0);
     glueMap = glue->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress4);
-    if (!glueMap || glueMap->getLength() < 0x4070) { LOG("glue BAR4 map failed or too small"); return false; }
+    if (!glueMap || glueMap->getLength() < 0x4070) { LOG("glue BAR4 map failed or too small"); return; }
     glueRegs = (volatile uint8_t *)glueMap->getVirtualAddress();
     LOG("glue BAR4 at phys %llx, %llu bytes", (unsigned long long)glueMap->getPhysicalAddress(), (unsigned long long)glueMap->getLength());
 
@@ -147,29 +169,27 @@ bool PS5SalinaGbE::start(IOService *provider)
     LOG("MAC %02x:%02x:%02x:%02x:%02x:%02x", mac.bytes[0], mac.bytes[1], mac.bytes[2], mac.bytes[3], mac.bytes[4], mac.bytes[5]);
     dumpRegs();
 
-    if (!allocRings()) { LOG("DMA allocation failed"); return false; }
+    if (!allocRings()) { LOG("DMA allocation failed"); return; }
 
-    timer = IOTimerEventSource::timerEventSource(this, (IOTimerEventSource::Action)&PS5SalinaGbE::pollTimer);
-    if (!timer || ownLoop->addEventSource(timer) != kIOReturnSuccess) return false;
 
     mediumDict = OSDictionary::withCapacity(2);
     IONetworkMedium *m = IONetworkMedium::medium(kIOMediumEthernetAuto, 1000 * 1000000ULL);
     IONetworkMedium *m1000 = IONetworkMedium::medium(kIOMediumEthernet1000BaseT | kIOMediumOptionFullDuplex, 1000 * 1000000ULL);
-    if (!mediumDict || !m || !m1000) return false;
+    if (!mediumDict || !m || !m1000) return;
     IONetworkMedium::addMedium(mediumDict, m);
     IONetworkMedium::addMedium(mediumDict, m1000);
-    if (!publishMediumDictionary(mediumDict)) return false;
+    if (!publishMediumDictionary(mediumDict)) return;
     setSelectedMedium(m);
     autoMedium = m1000;                      // the dictionary keeps both entries alive
     m->release();
     m1000->release();
 
-    if (!attachInterface((IONetworkInterface **)&netif, false)) { LOG("attachInterface failed"); return false; }
+    if (!attachInterface((IONetworkInterface **)&netif, false)) { LOG("attachInterface failed"); return; }
     netif->registerService();
     registerService();
-    LOG("started");
-    return true;
+    LOG("interface attached");
 }
+
 
 bool PS5SalinaGbE::createWorkLoop()
 {
@@ -183,6 +203,7 @@ IOWorkLoop *PS5SalinaGbE::getWorkLoop() const { return ownLoop; }
 void PS5SalinaGbE::stop(IOService *provider)
 {
     running = false;
+    if (initTimer) initTimer->cancelTimeout();
     if (timer) timer->cancelTimeout();
     if (regs) stopDma();
     if (outQueue) { outQueue->stop(); outQueue->flush(); }
@@ -193,6 +214,7 @@ void PS5SalinaGbE::stop(IOService *provider)
 
 void PS5SalinaGbE::free()
 {
+    if (initTimer) { if (ownLoop) ownLoop->removeEventSource(initTimer); initTimer->release(); initTimer = nullptr; }
     if (timer) { if (ownLoop) ownLoop->removeEventSource(timer); timer->release(); timer = nullptr; }
     if (ownLoop) { ownLoop->release(); ownLoop = nullptr; }
     freeRings();
@@ -487,7 +509,7 @@ void PS5SalinaGbE::hwInit()
     wr(GBE_REG_MODE, (rd(GBE_REG_MODE) & 0xffffff6e) | 0x81);
     wr(GBE_REG_RXBUF, 0x10100);
     writeMac();
-    wr(GBE_REG_COAL, GBE_COAL_VAL);
+    wr(GBE_REG_COAL, 0);
 }
 
 void PS5SalinaGbE::initTxRing()
@@ -524,14 +546,17 @@ void PS5SalinaGbE::ringsHw()
     wr(GBE_REG_RX_RING_CUR, rxRingPa);
     clrBits(GBE_REG_TXKICK, 1u << 6);                          // toggle bit 6: clears a stale LSO cause
     setBits(GBE_REG_TXKICK, 1u << 6);
+    pci->setBusMasterEnable(true);                             // only now, with both rings programmed
     setBits(GBE_REG_TX_DMA_CTRL, 1);
     setBits(GBE_REG_RX_DMA_CTRL, 1);
-    wr(GBE_REG_IER, GBE_IER_MASK);                             // MSI stays disabled in PCI config: only the ISR status is polled
+    wr(GBE_REG_ISR, rd(GBE_REG_ISR));
+    wr(GBE_REG_IMR, GBE_IMR_ALL);                              // polled: nothing is unmasked (0x54 is a mask register)
 }
 
 void PS5SalinaGbE::stopDma()
 {
-    wr(GBE_REG_IER, 0);
+    wr(GBE_REG_IMR, GBE_IMR_ALL);
+    wr(GBE_REG_COAL, 0);
     setBits(GBE_REG_TX_DMA_CTRL, GBE_DMA_STOP);
     int i;
     for (i = 0; i < 100000 && (rd(GBE_REG_TX_DMA_CTRL) & GBE_DMA_STOP); i++) IODelay(1);
@@ -571,7 +596,6 @@ IOReturn PS5SalinaGbE::enable(IONetworkInterface *iface)
 {
     if (running) return kIOReturnSuccess;
     LOG("enable");
-    pci->setBusMasterEnable(true);
     hwInit();
     rxFill();
     ringsHw();
@@ -762,63 +786,4 @@ void PS5SalinaGbE::pollTimer(OSObject *owner, IOTimerEventSource *t)
     if (!self || !self->running) return;
     self->poll();
     t->setTimeoutMS(1);
-}
-
-// ---------------------------------------------------------------------------------------------------------------- loader
-
-#undef super
-#define super IOService
-OSDefineMetaClassAndStructors(PS5SalinaGbELoader, IOService)
-
-bool PS5SalinaGbELoader::start(IOService *provider)
-{
-    if (!super::start(provider)) return false;
-    LOG("loader: kext is loaded");
-    registerService();
-    IOCreateThread(PS5SalinaGbELoader::worker, this);
-    return true;
-}
-
-void PS5SalinaGbELoader::worker(void *arg)
-{
-    IOSleep(8000);                                   // give the normal personality match a chance first
-    for (int round = 0; round < 6; round++) {
-        OSDictionary *m = IOService::serviceMatching("IOPCIDevice");
-        OSIterator *it = m ? IOService::getMatchingServices(m) : nullptr;
-        if (m) m->release();
-        IOPCIDevice *nic = nullptr;
-        if (it) {
-            OSObject *o;
-            while ((o = it->getNextObject())) {
-                IOPCIDevice *d = OSDynamicCast(IOPCIDevice, o);
-                if (d && d->configRead16(kIOPCIConfigVendorID) == 0x104d && d->configRead16(kIOPCIConfigDeviceID) == 0x9104) { nic = d; nic->retain(); break; }
-            }
-            it->release();
-        }
-        if (!nic) { LOG("loader: PCI nub 104d:9104 not found (round %d)", round); IOSleep(3000); continue; }
-
-        int children = 0;
-        OSIterator *ci = nic->getClientIterator();
-        if (ci) {
-            OSObject *o;
-            while ((o = ci->getNextObject())) {
-                children++;
-                IOService *s = OSDynamicCast(IOService, o);
-                LOG("loader: nub %02x:%02x.%x has client %s", nic->getBusNumber(), nic->getDeviceNumber(), nic->getFunctionNumber(), s ? s->getName() : "?");
-            }
-            ci->release();
-        }
-        LOG("loader: NIC nub found, %d clients, name %s", children, nic->getName());
-        if (children == 0) {
-            LOG("loader: nothing matched the NIC, starting PS5SalinaGbE by hand");
-            PS5SalinaGbE *drv = OSTypeAlloc(PS5SalinaGbE);
-            if (drv && drv->init(nullptr) && drv->attach(nic)) {
-                if (!drv->start(nic)) { LOG("loader: start failed"); drv->detach(nic); }
-            } else LOG("loader: could not create the driver object");
-            if (drv) drv->release();
-        }
-        nic->release();
-        return;
-    }
-    LOG("loader: giving up");
 }
