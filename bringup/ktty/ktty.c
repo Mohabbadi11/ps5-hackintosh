@@ -100,19 +100,48 @@ static void window(const char *tag)
     dump_lapic(" ->");
 }
 
-/* Fired on the multi-CPU panic text ("NMIPI for unresponsive"): what the APIC IER looked like on every CPU when it started, before and after
- * the fix in tools/make_ierfix.py (each CPU leaves two pixels per row in VRAM, bottom right: x=2000.., y=1430 before, y=1431 after).
- * Pixel 0 = 0xA5000000 | LAPIC id << 8 | IERE, pixel 1 = IER6. A missing record ("--") means that CPU never ran the hook. */
+/* Fired on the multi-CPU panic text ("NMIPI for unresponsive"): that line is printed by the STUCK CPU itself, from its NMI handler, so lapic_base()
+ * is its own LAPIC. Keep a snapshot of it in VRAM (rows 1433-1434, x=2200..; the console never draws on row 89 and later panics do not
+ * touch it) and print it at the very end, when "MACH Reboot" shows up. Words: 0 marker|id, 1 TPR, 2 PPR, 3 SVR, 4 ESR, 5 LVT timer,
+ * 6 timer count, 7 0x410, 8 IER6, 9 IER7, 10-17 ISR0-7, 18-25 IRR0-7, 26/27 IA32_APIC_BASE, 28/29 HWCR, 30 LINT0, 31 LINT1. */
+static void lapic_snapshot(void)
+{
+    volatile u32 *l = lapic_base();
+    u32 w[32];
+    w[0] = 0xA5C0DE00u | (l[0x20 / 4] >> 24); w[1] = l[0x80 / 4]; w[2] = l[0xA0 / 4]; w[3] = l[0xF0 / 4]; w[4] = l[0x280 / 4];
+    w[5] = l[0x320 / 4]; w[6] = l[0x390 / 4]; w[7] = l[0x410 / 4]; w[8] = l[0x4E0 / 4]; w[9] = l[0x4F0 / 4];
+    for (int i = 0; i < 8; i++) { w[10 + i] = l[(0x100 + 16 * i) / 4]; w[18 + i] = l[(0x200 + 16 * i) / 4]; }
+    u64 ab = rdmsr64(0x1B), hw = rdmsr64(0xC0010015);
+    w[26] = (u32)ab; w[27] = (u32)(ab >> 32); w[28] = (u32)hw; w[29] = (u32)(hw >> 32); w[30] = l[0x350 / 4]; w[31] = l[0x360 / 4];
+    for (u32 i = 0; i < 32; i++) px(KTTY_FB_OFF + (1433u + i / 16) * PITCH + (2200u + i % 16) * 4, w[i]);
+}
+
+static u32 vget(u32 row, u32 x) { out32(0x2000, (KTTY_FB_OFF + row * PITCH + x * 4) | 0x80000000u); return in32(0x2004); }
+
+/* Printed on "MACH Reboot": the stuck CPU's LAPIC snapshot, then what the APIC IER looked like on every CPU when it started, before and after
+ * the fix in tools/make_ierfix.py (two pixels per CPU: x=2000.., y=1430 before, y=1431 after; pixel 0 = 0xA5000000 | LAPIC id << 8 | IERE,
+ * pixel 1 = IER6; "--" = that CPU never ran the hook). */
 static void lapic_probe(void)
 {
-    kputs("\nIER per LAPIC id  (before: IERE IER6 | after: IERE IER6)\n");
+    u32 w[32];
+    for (u32 i = 0; i < 32; i++) w[i] = vget(1433u + i / 16, 2200u + i % 16);
+    if ((w[0] >> 8) == 0xA5C0DEu) {
+        kputs("\nSTUCK CPU LAPIC id "); khex(w[0] & 0xFF, 2);
+        kputs("\n tpr "); khex(w[1], 8); kputs(" ppr "); khex(w[2], 8); kputs(" svr "); khex(w[3], 8); kputs(" esr "); khex(w[4], 8);
+        kputs("\n lvt timer "); khex(w[5], 8); kputs(" cur "); khex(w[6], 8); kputs(" 410 "); khex(w[7], 8);
+        kputs(" ier6 "); khex(w[8], 8); kputs(" ier7 "); khex(w[9], 8);
+        kputs("\n isr7..0"); for (int i = 7; i >= 0; i--) { kch(' '); khex(w[10 + i], 8); }
+        kputs("\n irr7..0"); for (int i = 7; i >= 0; i--) { kch(' '); khex(w[18 + i], 8); }
+        kputs("\n apicbase "); khex(((u64)w[27] << 32) | w[26], 16); kputs(" hwcr "); khex(((u64)w[29] << 32) | w[28], 16);
+        kputs("\n lint0 "); khex(w[30], 8); kputs(" lint1 "); khex(w[31], 8); kch('\n');
+    } else {
+        kputs("\nno stuck-CPU snapshot (the NMIPI text never matched)\n");
+    }
+    kputs("IER per LAPIC id  (before: IERE IER6 | after: IERE IER6)\n");
     for (u32 id = 0; id < 16; id++) {
         u32 v[4];
         for (u32 r = 0; r < 2; r++)
-            for (u32 k = 0; k < 2; k++) {
-                out32(0x2000, (KTTY_FB_OFF + (1430u + r) * PITCH + 2000u * 4 + id * 8 + k * 4) | 0x80000000u);
-                v[r * 2 + k] = in32(0x2004);
-            }
+            for (u32 k = 0; k < 2; k++) v[r * 2 + k] = vget(1430u + r, 2000u + id * 2 + k);
         kputs(" id "); khex(id, 2);
         if ((v[0] >> 24) != 0xA5 || ((v[0] >> 8) & 0xFF) != id) { kputs(" --\n"); continue; }
         kputs("  before "); khex(v[0] & 1, 1); kch(' '); khex(v[1], 8);
@@ -132,7 +161,7 @@ void ktty_main(u8 c)
     volatile u32 *lap = lapic_base();
     if ((u64)lap >= 0xffffff0000000000ull && (lap[0x410 / 4] & 1) && lap[0x4E0 / 4] != 0xFFFFFFFFu)
         for (int i = 0; i < 8; i++) lap[(0x480 + 16 * i) / 4] = 0xFFFFFFFFu;
-#if defined(KTTY_RETURN_PAT) || defined(KTTY_DUMP_PAT)
+#if defined(KTTY_RETURN_PAT) || defined(KTTY_DUMP_PAT) || defined(KTTY_DUMP2_PAT)
     out32(0x2000, state_off | 0x80000000u);
     if ((in32(0x2004) >> 24) == 0x5A) {                 /* the screen is initialised: the matchers' state is valid */
 #ifdef KTTY_RETURN_PAT
@@ -156,7 +185,23 @@ void ktty_main(u8 c)
         if (fire) didx = 0x80;                          /* fire once */
         out32(0x2000, (state_off + 8) | 0x80000000u);
         out32(0x2004, 0xA5000000u | didx);
-        if (didx == 0x80 && fire) { kch(c); lapic_probe(); return; }
+#ifdef KTTY_DUMP2_PAT
+        if (didx == 0x80 && fire) { kch(c); lapic_snapshot(); return; }
+#else
+        if (didx == 0x80 && fire) { kch(c); lapic_snapshot(); lapic_probe(); return; }
+#endif
+#endif
+#ifdef KTTY_DUMP2_PAT
+        static const char dpat2[] = KTTY_DUMP2_PAT;
+        out32(0x2000, (state_off + 12) | 0x80000000u);
+        u32 dst2 = in32(0x2004);
+        u32 didx2 = ((dst2 >> 24) == 0xA5u) ? (dst2 & 0xFF) : 0;
+        if (c == (u8)dpat2[didx2]) didx2++; else didx2 = (c == (u8)dpat2[0]) ? 1 : 0;
+        int fire2 = (didx2 == sizeof(dpat2) - 1);
+        if (fire2) didx2 = 0x80;
+        out32(0x2000, (state_off + 12) | 0x80000000u);
+        out32(0x2004, 0xA5000000u | didx2);
+        if (didx2 == 0x80 && fire2) { kch(c); lapic_probe(); return; }
 #endif
     }
 #endif
