@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """AMD's extended APIC interrupt-enable registers (IERE, 0x410 bit 0, and IER0..7 at 0x480+16*n) come up set with almost every vector
 masked (IER6 = 0x1f): XNU's timer vector 0xDD and every IPI sit in IRR and are never delivered. Linux finds IERE off and all of IER on.
-XNU does not know these registers, so open them at the start of `_lapic_configure` (it runs on every CPU, before interrupts are on).
+XNU does not know these registers, so open them at the start of `_lapic_configure` (BSP only: i386_init, i386_smp_init, wake from sleep) and at the
+start of `_lapic_init_slave` (every AP, called from _vstart); an AP that keeps the closed IER ignores IPIs (TLB shootdown timeouts at cpus>1).
 
 Patch for the Monterey KC (21.6.0), as OpenCore Kernel>Patch entries (prints nothing; imported by make_baremetal_efi.py):
-  _lapic_configure (push rbp; mov rbp,rsp; push r14 = 6 bytes) -> jmp stub
-  _nfs4_parsefattr (dead NFSv4 code)                            -> stub: IER fix, the displaced instructions, jmp back
+  _lapic_configure (push rbp; mov rbp,rsp; push r14 = 6 bytes)          -> jmp stub 1
+  _lapic_init_slave (push rbp; mov rbp,rsp; mov ecx,0x1b = 9 bytes)       -> jmp stub 2
+  _nfs4_parsefattr (dead NFSv4 code)                                      -> stub 1 at +0, stub 2 at +0x80: IER fix, the displaced instructions, jmp back
 IER registers only accept writes while IERE is set, so the fix is: if IERE then IER0..7 = 0xFFFFFFFF."""
 import struct, subprocess, tempfile
 from pathlib import Path
@@ -16,6 +18,8 @@ KC = ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc"
 STUB_SYM = "_nfs4_parsefattr"
 LAPIC_VBASE = 0xffffff80012fc8a8           # the kernel variable holding the LAPIC's virtual base (Monterey 21.6.0)
 PROLOGUE = bytes.fromhex("554889e54156")    # push rbp; mov rbp, rsp; push r14
+SLAVE_PROLOGUE = bytes.fromhex("554889e5b91b000000")    # push rbp; mov rbp, rsp; mov ecx, 0x1b (the MSR number _lapic_init_slave reads next)
+STUB2_OFFSET = 0x80
 
 
 def _symbols():
@@ -29,13 +33,13 @@ def _kernel_bytes(va, n):
     return d[text_off + (va - text_va):text_off + (va - text_va) + n]
 
 
-def build_stub(stub_va, back_va):
+def build_stub(stub_va, back_va, displaced):
     lines = [".code64", ".globl stub", "stub:",
              "    movq lapic_vbase(%rip), %rax", "    testq %rax, %rax", "    jz 1f",
              "    movl 0x410(%rax), %ecx", "    testl $1, %ecx", "    jz 1f",
              "    movl $0xFFFFFFFF, %ecx"]
     lines += [f"    movl %ecx, {0x480 + 16 * i:#x}(%rax)" for i in range(8)]
-    lines += ["1:", "    pushq %rbp", "    movq %rsp, %rbp", "    pushq %r14", "    jmp back"]
+    lines += ["1:", *[f"    {i}" for i in displaced], "    jmp back"]
     with tempfile.TemporaryDirectory() as td:
         Path(f"{td}/s.S").write_text("\n".join(lines) + "\n")
         subprocess.check_call([f"{LLVM}/clang", "-target", "x86_64-unknown-none-elf", "-c", f"{td}/s.S", "-o", f"{td}/s.o"])
@@ -51,13 +55,18 @@ def patches():
                 "Identifier": "kernel", "Limit": limit, "Mask": b"", "MaxKernel": "", "MinKernel": "",
                 "Replace": code, "ReplaceMask": b"", "Skip": 0}
     sym = _symbols()
-    cfg, stub_va = sym["_lapic_configure"], sym[STUB_SYM]
+    cfg, slave, stub_va = sym["_lapic_configure"], sym["_lapic_init_slave"], sym[STUB_SYM]
     assert _kernel_bytes(cfg, len(PROLOGUE)) == PROLOGUE, "unexpected _lapic_configure prologue"
-    jmp = b"\xE9" + struct.pack("<i", stub_va - (cfg + 5)) + b"\x90"
-    stub = build_stub(stub_va, cfg + len(PROLOGUE))
-    assert len(stub) < 0x200
-    return [entry("_lapic_configure", PROLOGUE, jmp, "ier: _lapic_configure jumps to the IER fix", limit=0x10),
-            entry(STUB_SYM, b"", stub, "ier: open AMD's APIC IER vectors (unused NFSv4 code)")]
+    assert _kernel_bytes(slave, len(SLAVE_PROLOGUE)) == SLAVE_PROLOGUE, "unexpected _lapic_init_slave prologue"
+    stub1 = build_stub(stub_va, cfg + len(PROLOGUE), ["pushq %rbp", "movq %rsp, %rbp", "pushq %r14"])
+    stub2 = build_stub(stub_va + STUB2_OFFSET, slave + len(SLAVE_PROLOGUE), ["pushq %rbp", "movq %rsp, %rbp", "movl $0x1b, %ecx"])
+    assert len(stub1) <= STUB2_OFFSET and len(stub2) < 0x80
+    blob = stub1 + b"\x90" * (STUB2_OFFSET - len(stub1)) + stub2
+    jmp1 = b"\xE9" + struct.pack("<i", stub_va - (cfg + 5)) + b"\x90"
+    jmp2 = b"\xE9" + struct.pack("<i", stub_va + STUB2_OFFSET - (slave + 5)) + b"\x90" * (len(SLAVE_PROLOGUE) - 5)
+    return [entry("_lapic_configure", PROLOGUE, jmp1, "ier: _lapic_configure jumps to the IER fix", limit=0x10),
+            entry("_lapic_init_slave", SLAVE_PROLOGUE, jmp2, "ier: _lapic_init_slave (every AP) jumps to the IER fix", limit=0x10),
+            entry(STUB_SYM, b"", blob, "ier: open AMD's APIC IER vectors (unused NFSv4 code)")]
 
 
 if __name__ == "__main__":
