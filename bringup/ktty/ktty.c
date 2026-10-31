@@ -107,13 +107,23 @@ static void window(const char *tag)
 static void lapic_snapshot(void)
 {
     volatile u32 *l = lapic_base();
-    u32 w[32];
+    u32 w[56];
     w[0] = 0xA5C0DE00u | (l[0x20 / 4] >> 24); w[1] = l[0x80 / 4]; w[2] = l[0xA0 / 4]; w[3] = l[0xF0 / 4]; w[4] = l[0x280 / 4];
     w[5] = l[0x320 / 4]; w[6] = l[0x390 / 4]; w[7] = l[0x410 / 4]; w[8] = l[0x4E0 / 4]; w[9] = l[0x4F0 / 4];
     for (int i = 0; i < 8; i++) { w[10 + i] = l[(0x100 + 16 * i) / 4]; w[18 + i] = l[(0x200 + 16 * i) / 4]; }
     u64 ab = rdmsr64(0x1B), hw = rdmsr64(0xC0010015);
     w[26] = (u32)ab; w[27] = (u32)(ab >> 32); w[28] = (u32)hw; w[29] = (u32)(hw >> 32); w[30] = l[0x350 / 4]; w[31] = l[0x360 / 4];
-    for (u32 i = 0; i < 32; i++) px(KTTY_FB_OFF + (1433u + i / 16) * PITCH + (2200u + i % 16) * 4, w[i]);
+    /* is any of it an artefact? read again, then poke the APIC: TPR=0, then an EOI, looking at PPR/ISR/IRR after each */
+    u64 ab2 = rdmsr64(0x1B);
+    w[32] = (u32)ab2; w[33] = (u32)(ab2 >> 32); w[34] = l[0xA0 / 4]; w[35] = l[0xA0 / 4]; w[36] = l[0x20 / 4]; w[37] = l[0x30 / 4]; w[38] = l[0x80 / 4];
+    for (int i = 0; i < 8; i++) w[39 + i] = l[(0x180 + 16 * i) / 4];
+    w[47] = 0;
+    l[0x80 / 4] = 0;                                                       /* TPR = 0 */
+    w[48] = l[0x80 / 4]; w[49] = l[0xA0 / 4]; w[50] = l[0x160 / 4]; w[51] = l[0x260 / 4];
+    l[0xB0 / 4] = 0;                                                       /* one EOI */
+    w[52] = l[0xA0 / 4]; w[53] = l[0x160 / 4]; w[54] = l[0x260 / 4];
+    u64 ab3 = rdmsr64(0x1B); w[55] = (u32)ab3;
+    for (u32 i = 0; i < 56; i++) px(KTTY_FB_OFF + (1433u + i / 16) * PITCH + (2200u + i % 16) * 4, w[i]);
 }
 
 static u32 vget(u32 row, u32 x) { out32(0x2000, (KTTY_FB_OFF + row * PITCH + x * 4) | 0x80000000u); return in32(0x2004); }
@@ -123,8 +133,8 @@ static u32 vget(u32 row, u32 x) { out32(0x2000, (KTTY_FB_OFF + row * PITCH + x *
  * pixel 1 = IER6; "--" = that CPU never ran the hook). */
 static void lapic_probe(void)
 {
-    u32 w[32];
-    for (u32 i = 0; i < 32; i++) w[i] = vget(1433u + i / 16, 2200u + i % 16);
+    u32 w[56];
+    for (u32 i = 0; i < 56; i++) w[i] = vget(1433u + i / 16, 2200u + i % 16);
     if ((w[0] >> 8) == 0xA5C0DEu) {
         kputs("\nSTUCK CPU LAPIC id "); khex(w[0] & 0xFF, 2);
         kputs("\n tpr "); khex(w[1], 8); kputs(" ppr "); khex(w[2], 8); kputs(" svr "); khex(w[3], 8); kputs(" esr "); khex(w[4], 8);
@@ -133,7 +143,14 @@ static void lapic_probe(void)
         kputs("\n isr7..0"); for (int i = 7; i >= 0; i--) { kch(' '); khex(w[10 + i], 8); }
         kputs("\n irr7..0"); for (int i = 7; i >= 0; i--) { kch(' '); khex(w[18 + i], 8); }
         kputs("\n apicbase "); khex(((u64)w[27] << 32) | w[26], 16); kputs(" hwcr "); khex(((u64)w[29] << 32) | w[28], 16);
-        kputs("\n lint0 "); khex(w[30], 8); kputs(" lint1 "); khex(w[31], 8); kch('\n');
+        kputs("\n lint0 "); khex(w[30], 8); kputs(" lint1 "); khex(w[31], 8);
+        kputs("\n 2nd read: apicbase "); khex(((u64)w[33] << 32) | w[32], 16); kputs(" ppr "); khex(w[34], 8); kch(' '); khex(w[35], 8);
+        kputs(" id "); khex(w[36], 8); kputs(" ver "); khex(w[37], 8); kputs(" tpr "); khex(w[38], 8);
+        kputs("\n tmr7..0"); for (int i = 7; i >= 0; i--) { kch(' '); khex(w[39 + i], 8); }
+        kputs("\n after TPR=0: tpr "); khex(w[48], 8); kputs(" ppr "); khex(w[49], 8); kputs(" isr6 "); khex(w[50], 8); kputs(" irr6 "); khex(w[51], 8);
+        kputs("\n after EOI:   ppr "); khex(w[52], 8); kputs(" isr6 "); khex(w[53], 8); kputs(" irr6 "); khex(w[54], 8);
+        kputs("  apicbase lo "); khex(w[55], 8);
+        kputs("\n this CPU now: apicbase "); khex(rdmsr64(0x1B), 16); kch('\n');
     } else {
         kputs("\nno stuck-CPU snapshot (the NMIPI text never matched)\n");
     }
