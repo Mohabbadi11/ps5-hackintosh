@@ -15,3 +15,16 @@ tools/__pycache__/
 bringup/ebstest/*.o
 bringup/ebstest/*.efi
 bringup/ebstest/ktty_blob.h
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.log
+*.tar
+*.ppm
+*.raw
+*.pcap
+.vscode/
+.idea/
+.claude/
+*.swp

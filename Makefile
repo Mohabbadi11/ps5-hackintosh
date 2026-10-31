@@ -9,13 +9,13 @@
 
 -include .env
 
-PS5_HOST     ?= 192.168.1.91
+PS5_HOST     ?=
 FTP_PORT     ?= 2121
 BUILD        := build
 LOADER_DIR   := third_party/ps5-linux-loader
 INITRAMFS_D  := $(BUILD)/initramfs_root
 
-export PS5_PAYLOAD_SDK ?= /Users/rodrigo/.local/ps5-payload-sdk
+export PS5_PAYLOAD_SDK ?= $(HOME)/.local/ps5-payload-sdk
 export LLVM_CONFIG     ?= /opt/homebrew/opt/llvm@18/bin/llvm-config
 
 .PHONY: all clean loader initramfs rootfs usb deploy acpi

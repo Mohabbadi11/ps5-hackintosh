@@ -10,7 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ELF="$PROJECT_DIR/build/bin/ps5-linux-loader.elf"
 
-PS5_HOST="${1:-${PS5_HOST:-192.168.1.91}}"
+[ -f "${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}/.env" ] && { set -a; . "${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}/.env"; set +a; }
+PS5_HOST="${1:-${PS5_HOST:?set PS5_HOST (the console IP while it listens for payloads) in .env}}"
 PAYLOAD_PORT=9021
 
 if [ ! -f "$ELF" ]; then

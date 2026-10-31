@@ -154,7 +154,7 @@ if [ "$GPU_MODE" = true ]; then
     QEMU_CMD="$QEMU_CMD -nographic -vga none"
 else
     echo "[hackintosh] VNC mode — connect from Mac with:"
-    echo "    open vnc://192.168.1.200:5900"
+    echo "    open vnc://${PS5_LINUX_HOST:-<console ip>}:5900"
     echo ""
     # VM_DISPLAY: vmware (default) | std (plain VGA) | ramfb (UEFI GOP framebuffer only)
     case "${VM_DISPLAY:-vmware}" in
@@ -162,7 +162,7 @@ else
         ramfb)  QEMU_CMD="$QEMU_CMD -device ramfb" ;;
         *)      QEMU_CMD="$QEMU_CMD -device vmware-svga,vgamem_mb=128" ;;
     esac
-    QEMU_CMD="$QEMU_CMD -object secret,id=vnc-pass,data=1234"
+    QEMU_CMD="$QEMU_CMD -object secret,id=vnc-pass,data=${VNC_PASSWORD:-changeme}"
     QEMU_CMD="$QEMU_CMD -vnc :0,password-secret=vnc-pass"
 fi
 

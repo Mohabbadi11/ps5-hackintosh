@@ -4,16 +4,17 @@
 # Usage: [CPUS=1] [KTTY_RETURN="DSMOS has arrived"] tools/return_run.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source tools/lib.sh
 export RETURN=1
 tools/ktty_run.sh
 echo "waiting for Linux to come back (up to 3 min)..."
 for i in $(seq 1 36); do
     sleep 5
-    if ssh -o ConnectTimeout=3 root@192.168.1.200 true 2>/dev/null; then
-        scp -q tools/macos_log.py root@192.168.1.200:/root/
-        ssh root@192.168.1.200 'python3 /root/macos_log.py /root/macos-log.txt'
+    if ssh -o ConnectTimeout=3 $PS5 true 2>/dev/null; then
+        scp -q tools/macos_log.py $PS5:/root/
+        ssh $PS5 'python3 /root/macos_log.py /root/macos-log.txt'
         mkdir -p build/logs/macos
-        scp -q root@192.168.1.200:/root/macos-log.txt "build/logs/macos/$(date +%Y%m%d-%H%M%S).txt"
+        scp -q $PS5:/root/macos-log.txt "build/logs/macos/$(date +%Y%m%d-%H%M%S).txt"
         echo "saved in build/logs/macos/"; exit 0
     fi
 done

@@ -55,6 +55,11 @@ def kext_entry(name):
 
 
 cfg = plistlib.load(open(ROOT / "opencore/config.plist", "rb"))
+# the Mac identity (serial, MLB, UUID, ROM) comes from .env, not from the repo
+import envfile
+_id = envfile.smbios()
+_g = cfg["PlatformInfo"]["Generic"]
+_g["SystemSerialNumber"], _g["MLB"], _g["SystemUUID"], _g["ROM"] = _id["SMBIOS_SERIAL"], _id["SMBIOS_MLB"], _id["SMBIOS_UUID"], bytes.fromhex(_id["SMBIOS_ROM"])
 cfg["Kernel"]["Add"] = [kext_entry("Lilu.kext"), kext_entry("VirtualSMC.kext"), kext_entry("SMCProcessor.kext"),
                         kext_entry("RestrictEvents.kext")]
 # SMCProcessor lives inside the VirtualSMC release but is a separate bundle; fix its executable path when needed

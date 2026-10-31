@@ -45,7 +45,7 @@ This console has **no UART**. No serial port, no debug header, nothing. When it 
 5. **cpus=2 deadlocked in the scheduler.** A thread was waiting for a lock it already held. Root cause: on AMD there's no Intel CPUID leaf 4, so XNU decided every logical CPU has **its own private cache**, so every logical CPU got **its own processor set**, so the scheduler ended up in a state it can't recover from. We now tell XNU what a Zen 2 cache hierarchy looks like (L1/L2 shared by 2 threads, L3 per CCX) and the problem goes away.
 6. **Own goal of the year.** Our debug console lived in kernel code that looked unused. `launchd` called `auditon`, jumped into our *font data*, and… yeah. It now lives in dead NFSv4 code, which this boot never runs. (Hey, a console with no network. Fits.)
 
-> 🧪 **Method note:** this was built by pair-programming with an LLM (Claude Code), with a second, bigger model on call as the "think about it harder" button. Every fix above came from *measure → hypothesis → one boot → photo of the TV → repeat*. About 120 commits, zero serial cables.
+> **Method:** built with AI pair-programming. Every fix above came from *measure → hypothesis → one boot → photo of the TV → repeat*. About 120 commits, zero serial cables.
 
 ---
 
@@ -60,6 +60,8 @@ This console has **no UART**. No serial port, no debug header, nothing. When it 
 One crash-kexec per jailbreak boot. Chain two and the console resets. So: one attempt, one photo, think, repeat.
 
 ```bash
+cp .env.example .env        # then put the console's Linux IP in PS5_LINUX_HOST (Mac identity is generated on first build)
+
 # on the Mac you build on, with the console up in Linux:
 tools/clean_run.sh                       # quiet build: cpus=2, internal SSD blocked
 NVMEBLOCK=0 CPUS=1 tools/clean_run.sh    # the known-good one-CPU build
