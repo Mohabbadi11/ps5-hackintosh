@@ -105,6 +105,8 @@ private:
     uint32_t pcsRd(uint32_t off) { return OSReadLittleInt32((volatile void *)glueRegs, GBE_PCS_BASE + off); }
 
     // setup
+    uint32_t sfcRead(uint16_t rid, uint32_t reg);
+    IOMemoryMap *mapPhys(uint64_t phys, uint64_t len, IOMemoryDescriptor **mdOut);
     IOPCIDevice *findGlue();
     bool allocDma(IOBufferMemoryDescriptor **md, size_t size, void **va, uint32_t *pa);
     void deferredInit();
@@ -150,7 +152,8 @@ private:
     static void pollTimer(OSObject *owner, IOTimerEventSource *t);
 
     IOPCIDevice *pci = nullptr, *glue = nullptr;
-    IOMemoryMap *regMap = nullptr, *glueMap = nullptr;
+    IOMemoryMap *regMap = nullptr, *glueMap = nullptr, *ecamMap = nullptr;
+    IOMemoryDescriptor *regMd = nullptr, *glueMd = nullptr, *ecamMd = nullptr;
     volatile uint8_t *regs = nullptr, *glueRegs = nullptr;
     IOWorkLoop *ownLoop = nullptr;
     IOTimerEventSource *timer = nullptr, *initTimer = nullptr;

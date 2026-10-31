@@ -24,6 +24,39 @@ bool PS5SalinaGbE::init(OSDictionary *properties)
     return lock != nullptr;
 }
 
+// The PS5's Salina functions sit behind an ARI bus whose config space is a proxy: Linux reads the real registers through a window in the root
+// complex (arch/x86/pci/common.c, sfc_read): the requester id at config 0x150 names the real function, and bus 0 dev 0's extended config space
+// holds the window (0xd00/0xd10 or 0xd80/0xd90 select, 0xf00/0xf80 read). A BAR written through the normal path only reaches the proxy, so the
+// addresses macOS "assigned" (0x066xxxxx) are not where the chip answers.
+#define GBE_ECAM_BASE 0xF0000000ULL
+uint32_t PS5SalinaGbE::sfcRead(uint16_t rid, uint32_t reg)
+{
+    if (!ecamMap) return 0xFFFFFFFF;
+    volatile uint8_t *e = (volatile uint8_t *)ecamMap->getVirtualAddress();
+    uint32_t busno = (rid >> 8) & 0xff, slot = (rid & 0xff) >> 3, func = rid & 7;
+    if (busno == 0 || busno == 32) {
+        OSWriteLittleInt32((volatile void *)e, 0xd90, 4);
+        OSWriteLittleInt32((volatile void *)e, 0xd80, (32u << 24) | (slot << 19) | (func << 16) | (reg & 0xf80));
+        return OSReadLittleInt32((volatile void *)e, (reg & 0x7f) | 0xf80);
+    }
+    if (busno < 32) {
+        OSWriteLittleInt32((volatile void *)e, 0xd10, busno == 1 ? 4 : 5);
+        OSWriteLittleInt32((volatile void *)e, 0xd00, (busno << 24) | (slot << 19) | (func << 16) | (reg & 0xf80));
+        return OSReadLittleInt32((volatile void *)e, (reg & 0x7f) | 0xf00);
+    }
+    return 0xFFFFFFFF;
+}
+
+IOMemoryMap *PS5SalinaGbE::mapPhys(uint64_t phys, uint64_t len, IOMemoryDescriptor **mdOut)
+{
+    IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(phys, len, kIODirectionNone);
+    if (!md) return nullptr;
+    IOMemoryMap *m = md->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapInhibitCache);
+    if (!m) { md->release(); return nullptr; }
+    *mdOut = md;
+    return m;
+}
+
 IOPCIDevice *PS5SalinaGbE::findGlue()
 {
     // the glue (104d:9107) is the sibling function behind the same bridge
@@ -136,18 +169,18 @@ void PS5SalinaGbE::initTimerFired(OSObject *owner, IOTimerEventSource *)
 void PS5SalinaGbE::deferredInit()
 {
     LOG("deferred init");
-    pci->setMemoryEnable(true);
-    regMap = pci->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
-    if (!regMap || regMap->getLength() < 0x208) { LOG("BAR0 map failed or too small"); return; }
-    regs = (volatile uint8_t *)regMap->getVirtualAddress();
-    LOG("BAR0 at phys %llx, %llu bytes", (unsigned long long)regMap->getPhysicalAddress(), (unsigned long long)regMap->getLength());
-
-    // Linux left the chip running with its rings armed: mask and stop it (no reset here)
-    LOG("DMA state as found: tx ctl %08x rx ctl %08x tx base %08x cur %08x rx base %08x cur %08x imr %08x isr %08x", rd(0x34), rd(0x38), rd(0x44), rd(0x3c), rd(0x48), rd(0x40), rd(0x54), rd(0x50));
-    stopDma();
-    wr(GBE_REG_ISR, rd(GBE_REG_ISR));
-    LOG("DMA state after stop: tx ctl %08x rx ctl %08x imr %08x", rd(0x34), rd(0x38), rd(0x54));
-
+    // 1. what macOS thinks (the proxy) and what the chip really decodes (the sfc window)
+    LOG("proxy config: command %04x bar0 %08x %08x bar2 %08x bar4 %08x", pci->configRead16(kIOPCIConfigCommand), pci->configRead32(0x10), pci->configRead32(0x14), pci->configRead32(0x18), pci->configRead32(0x20));
+    ecamMap = mapPhys(GBE_ECAM_BASE, 0x1000, &ecamMd);
+    uint16_t nicRid = pci->extendedConfigRead16(0x150);
+    LOG("NIC requester id %04x, ECAM map %p", nicRid, ecamMap);
+    uint64_t nicBar0 = 0x85000000ULL;                     // what Linux saw (lspci) on this console: the fallback
+    uint64_t glueBar4 = 0x85400000ULL;
+    if (ecamMap && nicRid && nicRid != 0xffff) {
+        uint32_t lo = sfcRead(nicRid, 0x10), hi = sfcRead(nicRid, 0x14), cmd = sfcRead(nicRid, 0x04);
+        LOG("NIC real config: command %08x bar0 %08x %08x", cmd, lo, hi);
+        if (lo != 0xffffffff && (lo & 0xf) == 0xc) nicBar0 = ((uint64_t)hi << 32) | (lo & ~0xfu);
+    }
     glue = nullptr;
     for (int tries = 0; tries < 10 && !glue; tries++) {
         glue = findGlue();
@@ -155,11 +188,30 @@ void PS5SalinaGbE::deferredInit()
     }
     if (!glue) { LOG("glue function 104d:9107 not found"); return; }
     glue->retain();
-    LOG("glue command %04x, PMCSR power state D%d", glue->configRead16(kIOPCIConfigCommand), 0);
-    glueMap = glue->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress4);
-    if (!glueMap || glueMap->getLength() < 0x4070) { LOG("glue BAR4 map failed or too small"); return; }
+    uint16_t glueRid = glue->extendedConfigRead16(0x150);
+    LOG("glue requester id %04x", glueRid);
+    if (ecamMap && glueRid && glueRid != 0xffff) {
+        uint32_t lo = sfcRead(glueRid, 0x20), hi = sfcRead(glueRid, 0x24);
+        LOG("glue real config: bar0 %08x bar2 %08x bar4 %08x %08x", sfcRead(glueRid, 0x10), sfcRead(glueRid, 0x18), lo, hi);
+        if (lo != 0xffffffff && (lo & 0xf) == 0xc) glueBar4 = ((uint64_t)hi << 32) | (lo & ~0xfu);
+    }
+    LOG("using NIC BAR0 %llx, glue BAR4 %llx", (unsigned long long)nicBar0, (unsigned long long)glueBar4);
+
+    regMap = mapPhys(nicBar0, 0x1000, &regMd);
+    if (!regMap) { LOG("BAR0 map failed"); return; }
+    regs = (volatile uint8_t *)regMap->getVirtualAddress();
+    glueMap = mapPhys(glueBar4, 0x80000, &glueMd);
+    if (!glueMap) { LOG("glue BAR4 map failed"); return; }
     glueRegs = (volatile uint8_t *)glueMap->getVirtualAddress();
-    LOG("glue BAR4 at phys %llx, %llu bytes", (unsigned long long)glueMap->getPhysicalAddress(), (unsigned long long)glueMap->getLength());
+    uint32_t probeNic = rd(0x04), probeGlue = pcsRd(0);
+    LOG("probe reads: nic 0x04 %08x, glue 0x4000 %08x", probeNic, probeGlue);
+    if (probeNic == 0xffffffff || probeGlue == 0xffffffff) { LOG("the registers do not answer: not attaching an interface"); return; }
+
+    // Linux left the chip running with its rings armed: mask and stop it (no reset here)
+    LOG("DMA state as found: tx ctl %08x rx ctl %08x tx base %08x cur %08x rx base %08x cur %08x imr %08x isr %08x", rd(0x34), rd(0x38), rd(0x44), rd(0x3c), rd(0x48), rd(0x40), rd(0x54), rd(0x50));
+    stopDma();
+    wr(GBE_REG_ISR, rd(GBE_REG_ISR));
+    LOG("DMA state after stop: tx ctl %08x rx ctl %08x imr %08x", rd(0x34), rd(0x38), rd(0x54));
 
     uint32_t rev = pcsRd(0);
     chipId = ((rev >> 8) & 0xff0000);          // 0x11xxxxxx -> 0x110000 (Salina), 0x12 -> 0x120000 (Salina 2)
@@ -220,6 +272,10 @@ void PS5SalinaGbE::free()
     freeRings();
     if (regMap) { regMap->release(); regMap = nullptr; }
     if (glueMap) { glueMap->release(); glueMap = nullptr; }
+    if (ecamMap) { ecamMap->release(); ecamMap = nullptr; }
+    if (regMd) { regMd->release(); regMd = nullptr; }
+    if (glueMd) { glueMd->release(); glueMd = nullptr; }
+    if (ecamMd) { ecamMd->release(); ecamMd = nullptr; }
     if (glue) { glue->release(); glue = nullptr; }
     if (pci) { pci->release(); pci = nullptr; }
     if (mediumDict) { mediumDict->release(); mediumDict = nullptr; }
