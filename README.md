@@ -134,12 +134,6 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 - **The Linux `amdgpu` driver**: our reference for how this GPU actually behaves.
 - Everyone who ever posted a register dump on a forum.
 
-## Related work (read, not used)
-
-Nothing from these projects is copied or included here; they're the closest prior art we know of, and they shaped the GPU roadmap item.
-
-- [MetalCyan](https://github.com/amethyst8118/MetalCyan) (+ its EFI repo) by amethyst8118, built on [NootedRed](https://github.com/ChefKissInc/NootedRed) by ChefKiss: Metal acceleration for the ASRock BC-250 (same *Cyan Skillfish* family as the PS5's GPU) on macOS Tahoe.
-
 ## License
 
 No license file yet. Until there is one: look, learn, ask first. Third-party code keeps its own licenses (see `third_party/` and the upstream repos above).
