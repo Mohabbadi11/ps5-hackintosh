@@ -1,7 +1,7 @@
-# 🍎 macOS on PS5 — bare metal, no VM, no cap
+# macOS on PS5 — bare metal, no VM
 
 > We put **macOS Monterey** on a **PlayStation 5**. Not in a VM. Not streamed. Not "technically." The Apple kernel is running on the console's Zen 2 cores and drawing the desktop on the TV.
-> Sony was not consulted. Sony would like a word. 💅
+> Sony was not consulted.
 
 ```
                 ┌──────────────────────────────────────────────┐
@@ -10,14 +10,14 @@
                                 ▼
               EDK2 UEFI payload  →  OpenCore  →  boot.efi  →  XNU 21.6.0
                                 ▼
-                  macOS 12.7.6 on an AMD "Oberon" SoC. Yes, really.
+                  macOS 12.7.6 on an AMD "Oberon" SoC.
 ```
 
 **Status: it boots to a stable desktop with keyboard, mouse and trackpad.** It's slow because there's no GPU acceleration yet (more on that below), and it only knows how to be a computer after a very specific ritual. Details, receipts and a lot of bit-twiddling below.
 
 ---
 
-## ✨ What works (and what's still cooking)
+## What works (and what doesn't)
 
 | | Status | Notes |
 |---|---|---|
@@ -25,7 +25,7 @@
 | 🖥️ Display | ✅ | 2560×1440, WindowServer on the firmware framebuffer. **No hardware acceleration** (yet) |
 | ⌨️🖱️ USB input | ✅ | Keyboard, mouse, trackpad (even the scroll) |
 | 💾 USB storage | ✅ | Boot disk is a USB SSD (APFS). The AMD xHCI behaves once the clocks are right |
-| 🌐 Ethernet | ❌ | Sony put a proprietary "Salina" NIC in there. macOS: *cable? never heard of her.* Use a USB adapter |
+| 🌐 Ethernet | ❌ | Sony put a proprietary "Salina" NIC in there. macOS: *"what cable?"* Use a USB adapter |
 | 📶 Wi-Fi / 🔵 BT | ❌ | NXP IW620 combo chip. No driver on this planet for macOS. USB dongles are your friends |
 | 🔊 Audio | ❌ | HDMI audio needs a real AMD framebuffer driver. USB DAC / headset works in principle |
 | 🎮 GPU acceleration | ❌ | RDNA 1 "Cyan Skillfish". There's a Metal project for the sibling BC-250 board; see [Roadmap](#-roadmap) |
@@ -34,26 +34,26 @@
 
 ---
 
-## 🧨 The boss fights (a.k.a. why this took a minute)
+## The bugs that cost us the most time
 
-This console has **no UART**. No serial port, no debug header, nothing. When it breaks, you get a black screen and vibes. So the very first problem was: *how do you debug a computer that refuses to talk?* Answer: with the TV. 📺
+This console has **no UART**. No serial port, no debug header, nothing. When it breaks, you get a black screen and nothing else. So the very first problem was: *how do you debug a computer that refuses to talk?* Answer: with the TV.
 
-1. **"Printf, but it's colored squares."** First debugging tool: tiny code patches that paint a colored square on screen when a kernel function runs. Great for *"did we reach `i386_init`?"*, terrible for everything else. So we wrote **ktty**: a text console injected into the kernel itself that draws every `kprintf` character through the GPU's I/O-port window (no page tables needed). Now the macOS verbose boot shows up on the PS5 like it was always meant to. (Sony: *"why does that work?"* Us: 🤷)
-2. **The CPU that couldn't be interrupted.** The LAPIC timer expired, the interrupt was *pending*, the CPU had interrupts enabled… and **nothing was ever delivered**. Turns out AMD's *extended APIC* has per-vector interrupt-enable registers (IER) that come up with almost every vector masked. XNU has never heard of them. Linux sees them in a sane state; something between Linux and macOS leaves them closed. One tiny kernel hook later: interrupts. 🎉
+1. **Printf, but with colored squares.** First debugging tool: tiny code patches that paint a colored square on screen when a kernel function runs. Great for *"did we reach `i386_init`?"*, terrible for everything else. So we wrote **ktty**: a text console injected into the kernel itself that draws every `kprintf` character through the GPU's I/O-port window (no page tables needed). Now the macOS verbose boot shows up on the PS5 like it was always meant to. (Sony, presumably: *"why does that work?"*)
+2. **The CPU that couldn't be interrupted.** The LAPIC timer expired, the interrupt was *pending*, the CPU had interrupts enabled… and **nothing was ever delivered**. Turns out AMD's *extended APIC* has per-vector interrupt-enable registers (IER) that come up with almost every vector masked. XNU has never heard of them. Linux sees them in a sane state; something between Linux and macOS leaves them closed. One tiny kernel hook later: interrupts.
 3. **The 1 GHz lie.** OpenCore told XNU the TSC runs at 1 GHz. It runs at 1596.3 MHz. Every timeout in the kernel was ~37 % too short, so the USB 3 controller's power-up timed out *before it was ready*. The boot only worked at all when interrupts were *broken* (funny how that goes). We now overwrite the clock globals at the end of `tsc_init`.
-4. **The framebuffer wants to live in a PCI BAR.** macOS' stock display driver (`IONDRVFramebuffer`) only accepts a boot framebuffer that sits inside one of the GPU's BARs. Ours sat in the middle of Sony's carve-out. So Linux (before we jump to UEFI) fills VRAM top-down until the picture lands in the first 256 MB, and our stage tells UEFI "the screen is at BAR0 + offset". WindowServer: *finally, someone who gets me.*
-5. **cpus=2 deadlocked in the scheduler.** A thread was waiting for a lock it already held. Root cause: on AMD there's no Intel CPUID leaf 4, so XNU decided every logical CPU has **its own private cache**, so every logical CPU got **its own processor set**, so the scheduler lost the plot. We now tell XNU what a Zen 2 cache hierarchy looks like (L1/L2 shared by 2 threads, L3 per CCX) and it chills.
+4. **The framebuffer wants to live in a PCI BAR.** macOS' stock display driver (`IONDRVFramebuffer`) only accepts a boot framebuffer that sits inside one of the GPU's BARs. Ours sat in the middle of Sony's carve-out. So Linux (before we jump to UEFI) fills VRAM top-down until the picture lands in the first 256 MB, and our stage tells UEFI "the screen is at BAR0 + offset". WindowServer, finally: *oh, that's what you meant.*
+5. **cpus=2 deadlocked in the scheduler.** A thread was waiting for a lock it already held. Root cause: on AMD there's no Intel CPUID leaf 4, so XNU decided every logical CPU has **its own private cache**, so every logical CPU got **its own processor set**, so the scheduler ended up in a state it can't recover from. We now tell XNU what a Zen 2 cache hierarchy looks like (L1/L2 shared by 2 threads, L3 per CCX) and the problem goes away.
 6. **Own goal of the year.** Our debug console lived in kernel code that looked unused. `launchd` called `auditon`, jumped into our *font data*, and… yeah. It now lives in dead NFSv4 code, which this boot never runs. (Hey, a console with no network. Fits.)
 
 > 🧪 **Method note:** this was built by pair-programming with an LLM (Claude Code), with a second, bigger model on call as the "think about it harder" button. Every fix above came from *measure → hypothesis → one boot → photo of the TV → repeat*. About 120 commits, zero serial cables.
 
 ---
 
-## 🚀 How it boots (the ritual)
+## How it boots
 
 1. Jailbreak the console and load **Linux** with `ps5-linux-loader` (not included, and we won't be explaining the exploit part). Needs `crashkernel=400M` on the kernel command line.
 2. Linux puts a linear 2560×1440 framebuffer on screen — a welcome screen, because we have *standards* — and holds it.
-3. `kexec_file_load` stages **our own stage 1** as the *crash kernel*, then `sysrq-c` runs it. A crash doesn't shut devices down, so the GPU just keeps scanning out. (Yes, we crash the kernel on purpose to boot an OS. It's fine.)
+3. `kexec_file_load` stages **our own stage 1** as the *crash kernel*, then `sysrq-c` runs it. A crash doesn't shut devices down, so the GPU just keeps scanning out. (Yes, we crash the kernel on purpose to boot an OS.)
 4. Stage 1 builds an identity map, turns the AMD IOMMU off, builds the UEFI hand-off (HOBs, memory map, the real ACPI tables Sony shipped), and jumps into an **EDK2 UefiPayload**.
 5. **OpenCore** takes over. A pile of kernel patches (see below) make XNU believe it's on hardware it can live with. `boot.efi` → **XNU 21.6.0** → desktop.
 
@@ -70,7 +70,7 @@ Then pick **Macintosh HD** in the OpenCore menu.
 
 ---
 
-## 🧩 The kernel patches (greatest hits)
+## The kernel patches
 
 All of these are OpenCore `Kernel > Patch` entries, built by `tools/make_baremetal_efi.py`. Most of the code lives in **stubs placed in unused NFSv4 functions** of the kernel image.
 
@@ -87,7 +87,7 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 
 ---
 
-## 🛡️ Safety (please read)
+## Safety (please read)
 
 - **The internal SSD stays untouched.** macOS has an NVMe driver that would happily try to attach to Sony's SSD controller. We block it (`IONVMeFamily`, *Disable*). Boot from USB.
 - Never accept a "disk not readable → Initialize" prompt on anything you didn't create.
@@ -99,7 +99,7 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 
 ---
 
-## 🗺️ Repo map
+## Repo map
 
 | Path | What's in it |
 |---|---|
@@ -112,7 +112,7 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 - [x] Boot XNU on the PS5 with a visible log
 - [x] Interrupts, clocks, USB boot disk
@@ -122,29 +122,29 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 - [ ] Clean shutdown / restart
 - [ ] USB Ethernet / audio / Bluetooth dongles
 - [ ] Cosmetics: *About This Mac* says 1 GHz and "DDR4" (the PS5 has 16 GB of **GDDR6**, we know)
-- [ ] **GPU acceleration.** The honest odds are low (~10–15 %): the PS5 has a fixed 512 MB VRAM carve-out and no PSP/SMU in the GPU's path, while the closest prior art ([MetalCyan](https://github.com/amethyst8118/MetalCyan), for the ASRock BC-250, macOS Tahoe) needs 4 GB. A port would mean moving the whole stack to Tahoe and rewriting the firmware-loading path. We're looking. 👀
-- [ ] Boot without the jailbreak/Linux dance — *(Sony, if you're reading this: no, we're not holding our breath either)*
+- [ ] **GPU acceleration.** The honest odds are low (~10–15 %): the PS5 has a fixed 512 MB VRAM carve-out and no PSP/SMU in the GPU's path, while the closest prior art ([MetalCyan](https://github.com/amethyst8118/MetalCyan), for the ASRock BC-250, macOS Tahoe) needs 4 GB. A port would mean moving the whole stack to Tahoe and rewriting the firmware-loading path. We're looking into it.
+- [ ] Boot without the jailbreak/Linux dance — *(we're not holding our breath)*
 
 ---
 
-## 🙏 Credits & thanks
+## Credits
 
 - **`ps5-linux-loader`** and the people behind the PS5 Linux work: the door we walked through.
 - **Acidanthera** (OpenCore, Lilu, VirtualSMC, RestrictEvents) and **AMD-OSX / AMD_Vanilla** (the base AMD kernel patches).
 - **EDK2** / TianoCore.
 - **The Linux `amdgpu` driver**: our reference for how this GPU actually behaves.
-- Everyone who ever posted a register dump on a forum at 3 a.m.
+- Everyone who ever posted a register dump on a forum.
 
-## 🔗 Related work (read, not used)
+## Related work (read, not used)
 
 Nothing from these projects is copied or included here; they're the closest prior art we know of, and they shaped the GPU roadmap item.
 
 - [MetalCyan](https://github.com/amethyst8118/MetalCyan) (+ its EFI repo) by amethyst8118, built on [NootedRed](https://github.com/ChefKissInc/NootedRed) by ChefKiss: Metal acceleration for the ASRock BC-250 (same *Cyan Skillfish* family as the PS5's GPU) on macOS Tahoe.
 
-## 📜 License
+## License
 
 No license file yet. Until there is one: look, learn, ask first. Third-party code keeps its own licenses (see `third_party/` and the upstream repos above).
 
 ---
 
-<sub>Built with way too much coffee, a TV used as a logic analyzer, and the unshakeable belief that "unsupported" is just a suggestion. ☕📺</sub>
+<sub>Built with a TV used as a logic analyzer and a lot of patience.</sub>
