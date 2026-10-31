@@ -100,39 +100,24 @@ static void window(const char *tag)
     dump_lapic(" ->");
 }
 
-static volatile u64 *kaddr(long delta)
-{
-    volatile u64 *p;
-    __asm__ volatile("lea ktty_main(%%rip), %0\n\tadd %1, %0" : "=&r"(p) : "er"(delta));
-    return p;
-}
-
-static void qd(const char *tag, volatile u64 *p, int n)
-{
-    kputs(tag);
-    for (int i = 0; i < n; i++) { if ((i & 3) == 0) kch('\n'); kch(' '); khex(p[i], 16); }
-    kch('\n');
-}
-
-static int kptr(u64 v) { return v >= 0xffffff0000000000ull; }
-
-/* Fired on the text of the multi-CPU panic ("Ticket spinlock"): what do CPU 0 and CPU 1 look like? cpu_data_ptr[], both cpu_data
- * (raw: cpu_this, active thread, cpu_number, int state, signals, running...), pset_node0, pset0 (its sched_lock is at +0x100, the
- * same place the panic's lock lives in the second pset), and the x86 package list. */
+/* Fired on the multi-CPU panic text ("NMIPI for unresponsive"): what the APIC IER looked like on every CPU when it started, before and after
+ * the fix in tools/make_ierfix.py (each CPU leaves two pixels per row in VRAM, bottom right: x=2000.., y=1380 before, y=1381 after).
+ * Pixel 0 = 0xA5000000 | LAPIC id << 8 | IERE, pixel 1 = IER6. A missing record ("--") means that CPU never ran the hook. */
 static void lapic_probe(void)
 {
-    volatile u64 *cpd = kaddr(KTTY_CPUPTR_DELTA);
-    kputs("\nCPUS");
-    qd(" cpu_data_ptr[0..3]", cpd, 4);
-    if (kptr(cpd[0])) qd(" cpu0 data", (volatile u64 *)cpd[0], 16);
-    if (kptr(cpd[1])) qd(" cpu1 data", (volatile u64 *)cpd[1], 16);
-    qd(" pset_node0", kaddr(KTTY_PSETNODE_DELTA), 8);
-    volatile u64 *ps0 = kaddr(KTTY_PSET0_DELTA);
-    qd(" pset0", ps0, 8);
-    qd(" pset0+0xf0", ps0 + 0x1e, 4);
-    volatile u64 *pk = kaddr(KTTY_PKGS_DELTA);
-    qd(" x86_pkgs", pk, 2);
-    if (kptr(pk[0])) qd(" pkg0", (volatile u64 *)pk[0], 8);
+    kputs("\nIER per LAPIC id  (before: IERE IER6 | after: IERE IER6)\n");
+    for (u32 id = 0; id < 16; id++) {
+        u32 v[4];
+        for (u32 r = 0; r < 2; r++)
+            for (u32 k = 0; k < 2; k++) {
+                out32(0x2000, (KTTY_FB_OFF + (1380u + r) * PITCH + 2000u * 4 + id * 8 + k * 4) | 0x80000000u);
+                v[r * 2 + k] = in32(0x2004);
+            }
+        kputs(" id "); khex(id, 2);
+        if ((v[0] >> 24) != 0xA5 || ((v[0] >> 8) & 0xFF) != id) { kputs(" --\n"); continue; }
+        kputs("  before "); khex(v[0] & 1, 1); kch(' '); khex(v[1], 8);
+        kputs("  after "); khex(v[2] & 1, 1); kch(' '); khex(v[3], 8); kch('\n');
+    }
 }
 #endif
 

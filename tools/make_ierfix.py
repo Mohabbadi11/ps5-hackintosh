@@ -9,7 +9,7 @@ Patch for the Monterey KC (21.6.0), as OpenCore Kernel>Patch entries (prints not
   _lapic_init_slave (push rbp; mov rbp,rsp; mov ecx,0x1b = 9 bytes)       -> jmp stub 2
   _nfs4_parsefattr (dead NFSv4 code)                                      -> stub 1 at +0, stub 2 at +0x80: IER fix, the displaced instructions, jmp back
 IER registers only accept writes while IERE is set, so the fix is: if IERE then IER0..7 = 0xFFFFFFFF."""
-import struct, subprocess, tempfile
+import os, struct, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +19,7 @@ STUB_SYM = "_nfs4_parsefattr"
 LAPIC_VBASE = 0xffffff80012fc8a8           # the kernel variable holding the LAPIC's virtual base (Monterey 21.6.0)
 PROLOGUE = bytes.fromhex("554889e54156")    # push rbp; mov rbp, rsp; push r14
 SLAVE_PROLOGUE = bytes.fromhex("554889e5b91b000000")    # push rbp; mov rbp, rsp; mov ecx, 0x1b (the MSR number _lapic_init_slave reads next)
-STUB2_OFFSET = 0x80
+STUB2_OFFSET = 0x200
 
 
 def _symbols():
@@ -33,12 +33,38 @@ def _kernel_bytes(va, n):
     return d[text_off + (va - text_va):text_off + (va - text_va) + n]
 
 
+PITCH = 10240
+# KTTY=1 builds record, per LAPIC id, what the IER registers looked like before and after the fix, as two VRAM pixels per CPU in a spot the
+# console never draws on (bottom right: x=2000.., y=1380 before the fix, y=1381 after). bringup/ktty prints them when the panic text shows up.
+PROBE = os.environ.get("KTTY") == "1"
+ROW_BEFORE, ROW_AFTER, PROBE_X = 1380, 1381, 2000
+
+
+def probe_asm(row):
+    """Needs rax = LAPIC base; keeps rax, clobbers r8-r10, edx (scratch at both hook sites). Pixel 0 = 0xA5000000 | id << 8 | IERE, pixel 1 = IER6."""
+    off = row * PITCH + PROBE_X * 4
+    return ["    pushq %rax",
+            "    movl 0x20(%rax), %r10d", "    shrl $24, %r10d", "    andl $15, %r10d",           # r10d = LAPIC id
+            "    movl %r10d, %r8d", "    shll $3, %r8d", "    addl $0xDEADF00D, %r8d", f"    addl ${off}, %r8d", "    orl $0x80000000, %r8d",
+            "    movl 0x410(%rax), %r9d", "    andl $1, %r9d", "    shll $8, %r10d", "    orl %r10d, %r9d", "    orl $0xA5000000, %r9d",
+            "    movw $0x2000, %dx", "    movl %r8d, %eax", "    outl %eax, %dx",
+            "    movw $0x2004, %dx", "    movl %r9d, %eax", "    outl %eax, %dx",
+            "    addl $4, %r8d", "    movw $0x2000, %dx", "    movl %r8d, %eax", "    outl %eax, %dx",
+            "    popq %rax", "    pushq %rax", "    movl 0x4E0(%rax), %eax",
+            "    movw $0x2004, %dx", "    outl %eax, %dx", "    popq %rax"]
+
+
 def build_stub(stub_va, back_va, displaced):
     lines = [".code64", ".globl stub", "stub:",
-             "    movq lapic_vbase(%rip), %rax", "    testq %rax, %rax", "    jz 1f",
-             "    movl 0x410(%rax), %ecx", "    testl $1, %ecx", "    jz 1f",
-             "    movl $0xFFFFFFFF, %ecx"]
+             "    movq lapic_vbase(%rip), %rax", "    testq %rax, %rax", "    jz 1f"]
+    if PROBE:
+        lines += probe_asm(ROW_BEFORE)
+    lines += ["    movl 0x410(%rax), %ecx", "    testl $1, %ecx", "    jz 2f",
+              "    movl $0xFFFFFFFF, %ecx"]
     lines += [f"    movl %ecx, {0x480 + 16 * i:#x}(%rax)" for i in range(8)]
+    lines += ["2:"]
+    if PROBE:
+        lines += probe_asm(ROW_AFTER)
     lines += ["1:", *[f"    {i}" for i in displaced], "    jmp back"]
     with tempfile.TemporaryDirectory() as td:
         Path(f"{td}/s.S").write_text("\n".join(lines) + "\n")
@@ -60,13 +86,13 @@ def patches():
     assert _kernel_bytes(slave, len(SLAVE_PROLOGUE)) == SLAVE_PROLOGUE, "unexpected _lapic_init_slave prologue"
     stub1 = build_stub(stub_va, cfg + len(PROLOGUE), ["pushq %rbp", "movq %rsp, %rbp", "pushq %r14"])
     stub2 = build_stub(stub_va + STUB2_OFFSET, slave + len(SLAVE_PROLOGUE), ["pushq %rbp", "movq %rsp, %rbp", "movl $0x1b, %ecx"])
-    assert len(stub1) <= STUB2_OFFSET and len(stub2) < 0x80
+    assert len(stub1) <= STUB2_OFFSET and len(stub2) < 0x300
     blob = stub1 + b"\x90" * (STUB2_OFFSET - len(stub1)) + stub2
     jmp1 = b"\xE9" + struct.pack("<i", stub_va - (cfg + 5)) + b"\x90"
     jmp2 = b"\xE9" + struct.pack("<i", stub_va + STUB2_OFFSET - (slave + 5)) + b"\x90" * (len(SLAVE_PROLOGUE) - 5)
     return [entry("_lapic_configure", PROLOGUE, jmp1, "ier: _lapic_configure jumps to the IER fix", limit=0x10),
             entry("_lapic_init_slave", SLAVE_PROLOGUE, jmp2, "ier: _lapic_init_slave (every AP) jumps to the IER fix", limit=0x10),
-            entry(STUB_SYM, b"", blob, "ier: open AMD's APIC IER vectors (unused NFSv4 code)")]
+            entry(STUB_SYM, b"", blob, ("ktty: ier probe + " if PROBE else "ier: ") + "open AMD's APIC IER vectors (unused NFSv4 code)")]
 
 
 if __name__ == "__main__":
