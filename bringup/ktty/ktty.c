@@ -4,8 +4,10 @@
  * (0x2000: MM_INDEX, 0x2004: MM_DATA, bit 31 of the index = VRAM access). It needs no page tables and no kernel services.
  *
  * Cursor state lives in the VRAM itself, in the pixel (0, 1439) below the text area: bits 0-8 column, 9-15 row, 16 wrapped,
- * 24-31 magic 0x5A. A missing magic means first call: clear the screen. After the text area has wrapped once, every new line is
- * cleared before it is written.
+ * 24-31 magic 0x5A. A missing magic means first call: nothing is cleared (the welcome screen stays); the per-row length table is zeroed.
+ * Per-row text length (columns) lives in row 1438, one pixel per text row: a new line is blanked only as far as the text that was
+ * there, so the log is a few black strips behind the text instead of a black sweep over the whole picture. The panic half is
+ * blanked once, when the first "panic(" shows up.
  * Build: tools/make_ktty.py (clang -Os, flat binary, rewrites KTTY_FB_OFF with the boot's VRAM offset of the framebuffer). */
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -25,7 +27,6 @@ static volatile const u32 ktty_fb_off __attribute__((used)) = 0xDEADF00Du;
 #define ROWS        89u
 #define FG          0xFFE0E0E0u
 #define BG          0xFF000000u
-#define BAR         0xFFFFFF00u
 
 static inline void out32(u16 port, u32 v) { __asm__ volatile("outl %0, %1" :: "a"(v), "Nd"(port)); }
 static inline u32 in32(u16 port) { u32 v; __asm__ volatile("inl %1, %0" : "=a"(v) : "Nd"(port)); return v; }
@@ -38,12 +39,9 @@ static void clear_rect(u32 x0, u32 y0, u32 lines, u32 w)
             px(KTTY_FB_OFF + y * PITCH + (x0 + x) * 4, BG);
 }
 
-static void bar(u32 row, u32 colour)
-{
-    for (u32 y = 0; y < 16; y++)
-        for (u32 x = 0; x < 8; x++)
-            px(KTTY_FB_OFF + (row * 16 + y) * PITCH + (RING_COLS * 8 + x) * 4, colour);
-}
+#define ROWLEN_Y 1438u
+static u32 rowlen_get(u32 row) { out32(0x2000, (KTTY_FB_OFF + ROWLEN_Y * PITCH + row * 4) | 0x80000000u); return in32(0x2004); }
+static void rowlen_set(u32 row, u32 len) { px(KTTY_FB_OFF + ROWLEN_Y * PITCH + row * 4, len); }
 
 static void glyph(u32 col, u32 row, u8 c)
 {
@@ -233,9 +231,8 @@ static void kch(u8 c)
     out32(0x2000, state_off | 0x80000000u);
     u32 st = in32(0x2004);
     if ((st >> 24) != 0x5A) {
-        clear_rect(0, 0, 1439, 2560);
+        for (u32 r = 0; r < ROWS; r++) rowlen_set(r, 0);
         st = 0x5A000000u;
-        bar(0, BAR);
     }
     u32 col = st & 0x1FF, row = (st >> 9) & 0x7F, wrapped = (st >> 16) & 1, pmode = (st >> 17) & 1, midx = (st >> 18) & 7;
 
@@ -244,6 +241,7 @@ static void kch(u8 c)
         else midx = (c == 'p') ? 1 : 0;
         if (midx == 6) {
             pmode = 1; midx = 0; col = 0; row = 0; wrapped = 0;
+            clear_rect(PANIC_X0 * 8, 0, ROWS * 16, PANIC_COLS * 8);
             for (u32 i = 0; i < 6; i++) glyph(PANIC_X0 + col++, row, pat[i]);
             goto store;
         }
@@ -259,14 +257,18 @@ static void kch(u8 c)
         if (col >= width) newline = 1;
     } else if (c >= 32 && c < 127) {
         glyph(xoff + col, row, c);
+        if (!pmode && rowlen_get(row) < col + 1) rowlen_set(row, col + 1);
         if (++col >= width) newline = 1;
     }
     if (newline) {
-        if (!pmode) bar(row, BG);
         col = 0;
         if (++row >= ROWS) { row = 0; wrapped = 1; }
-        if (wrapped) clear_rect(xoff * 8, row * 16, 16, width * 8);
-        if (!pmode) bar(row, BAR);
+        if (pmode) {
+            if (wrapped) clear_rect(xoff * 8, row * 16, 16, width * 8);
+        } else {
+            u32 len = rowlen_get(row);
+            if (len) { clear_rect(0, row * 16, 16, len * 8); rowlen_set(row, 0); }
+        }
     }
 store:
     out32(0x2000, state_off | 0x80000000u);
