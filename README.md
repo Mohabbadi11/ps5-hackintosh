@@ -87,15 +87,14 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 
 ---
 
-## Safety (please read)
+## Things worth knowing
 
-- **The internal SSD stays untouched.** macOS has an NVMe driver that would happily try to attach to Sony's SSD controller. We block it (`IONVMeFamily`, *Disable*). Boot from USB.
-- Never accept a "disk not readable → Initialize" prompt on anything you didn't create.
-- Turn **automatic updates off.** 12.7.6 is the last Monterey and an update replaces the kernel our patches are matched to.
-- With the IOMMU off, a misbehaving driver can DMA anywhere. Don't add kexts for PCI devices you don't recognize.
-- **You will void things.** Jailbreaking a console, running macOS on non-Apple hardware: that's on you. This is a research / "can it be done" project.
+- **The internal SSD stays untouched.** macOS has an NVMe driver that would try to attach to Sony's SSD controller. We disable it (`IONVMeFamily`, *Disable*). Boot from USB.
+- Don't accept a "disk not readable, initialize?" prompt on anything you didn't create.
+- Turn **automatic updates off.** 12.7.6 is the last Monterey, and an update replaces the kernel our patches are matched to.
+- The IOMMU is off, so a misbehaving driver can DMA anywhere. Be careful with kexts for PCI devices you don't recognize.
 
-> Not affiliated with, endorsed by, or approved by Sony or Apple. "PlayStation" and "macOS" belong to their owners. This repo ships **no** Apple software, **no** Sony firmware images (binary dumps are git-ignored; only our own ACPI *sources* are tracked) and **no** exploit code. You bring your own console, your own legally obtained macOS and your own jailbreak.
+The repo ships no Apple software, no Sony firmware images (binary dumps are git-ignored; only our own ACPI *sources* are tracked) and no exploit code. Bring your own console, macOS install and jailbreak.
 
 ---
 
