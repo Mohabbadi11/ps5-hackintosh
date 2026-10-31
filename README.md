@@ -72,6 +72,14 @@ Then pick **Macintosh HD** in the OpenCore menu.
 
 ---
 
+## A note on QEMU
+
+Early on we ran macOS as a **QEMU/KVM guest** on the console's own Linux (with the GPU passed through). That was never the goal, but it was a very good lab: with a working macOS next to us we could pull the kernel collection apart, compare IOKit registry trees, check what a healthy boot looks like and test ideas before touching the real hardware.
+
+**It is not part of the boot you see here.** Nothing in the current chain starts QEMU, and macOS is not running inside any VM: the Apple kernel runs directly on the CPU, started by our own stage 1 and OpenCore (see *How it boots*). The QEMU scripts are still in the repo as research tooling, not as a way to run it.
+
+---
+
 ## The kernel patches
 
 All of these are OpenCore `Kernel > Patch` entries, built by `tools/make_baremetal_efi.py`. Most of the code lives in **stubs placed in unused NFSv4 functions** of the kernel image.
@@ -109,7 +117,7 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 | `opencore/` | OpenCore config and the ACPI tables (Sony's, dumped and patched) |
 | `tools/` | Build/deploy scripts: `clean_run.sh`, `ktty_run.sh`, the patch generators, the welcome screen |
 | `third_party/ps5-linux-loader` | The upstream Linux loader: fetched, not vendored (`tools/fetch_binaries.sh`). Not ours; go star it |
-| `kernel/`, `initramfs/` | Linux kernel config + initramfs from the earlier **VM-based** attempt (QEMU/KVM/VFIO). Bare metal won; the VM stays around as a fallback |
+| `kernel/`, `initramfs/`, `tools/*qemu*`, `tools/create_macos_img.sh` | Research tooling from the QEMU phase (see below). **Not used to boot macOS anymore** |
 
 ---
 
