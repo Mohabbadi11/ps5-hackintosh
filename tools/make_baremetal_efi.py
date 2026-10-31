@@ -175,6 +175,12 @@ if os.environ.get("TSCFIX", "1") != "0":
 if os.environ.get("NVMEBLOCK", "1") != "0":
     cfg["Kernel"]["Block"].append({"Arch": "Any", "Comment": "Never let AppleNVMe near the internal Sony SSD", "Enabled": True,
                                     "Identifier": "com.apple.iokit.IONVMeFamily", "MaxKernel": "", "MinKernel": "", "Strategy": "Disable"})
+# Cache sharing/cores per package for XNU (tools/make_cachefix.py): without it every logical CPU gets its own processor set and cpus>1 deadlocks.
+# CACHEFIX=0 leaves the legacy AMD fallback.
+if os.environ.get("CACHEFIX", "1") != "0":
+    sys.path.insert(0, str(ROOT / "tools"))
+    import make_cachefix
+    cfg["Kernel"]["Patch"] = make_cachefix.patches() + cfg["Kernel"]["Patch"]
 # AMD's APIC interrupt-enable registers (tools/make_ierfix.py): without this no interrupt reaches the core. IERFIX=0 leaves them.
 if os.environ.get("IERFIX", "1") != "0":
     sys.path.insert(0, str(ROOT / "tools"))
@@ -185,6 +191,7 @@ if os.environ.get("QUIET") == "1":
     k = "7C436110-AB2A-4BBB-A880-FE41995C9F82"
     args = [a for a in cfg["NVRAM"]["Add"][k]["boot-args"].split() if a != "serial=3"]
     if os.environ.get("CPUS"): args.append("cpus=" + os.environ["CPUS"])
+    if os.environ.get("CPUS", "1") != "1": args.append("-topo")      # XNU prints the topology it builds (one line per cache/pset)
     cfg["NVRAM"]["Add"][k]["boot-args"] = " ".join(args)
 # KTTY=1: show the whole kernel console (printf/kprintf) on the screen, see bringup/ktty and tools/make_ktty.py
 if os.environ.get("KTTY") == "1":
