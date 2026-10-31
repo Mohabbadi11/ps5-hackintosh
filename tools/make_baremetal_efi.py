@@ -67,6 +67,11 @@ _gbe = ROOT / "build/kexts/PS5SalinaGbE.kext"
 if _gbe.exists() and os.environ.get("GBE") != "0":
     shutil.copytree(_gbe, OUT / "OC/Kexts/PS5SalinaGbE.kext")
     cfg["Kernel"]["Add"].append(kext_entry("PS5SalinaGbE.kext"))
+# PROBES=1 adds the throw-away kexts of tools/build_probes.sh (to find out why OpenCore drops a kext)
+if os.environ.get("PROBES") == "1":
+    for k in sorted((ROOT / "build/kexts-probe").glob("*.kext")):
+        shutil.copytree(k, OUT / "OC/Kexts" / k.name)
+        cfg["Kernel"]["Add"].append(kext_entry(k.name))
 # SMCProcessor lives inside the VirtualSMC release but is a separate bundle; fix its executable path when needed
 for e in cfg["Kernel"]["Add"]:
     stem = e["BundlePath"][:-5]
