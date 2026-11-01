@@ -154,7 +154,7 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 
 ## License
 
-No license file yet. Until there is one: look, learn, ask first. Third-party code keeps its own licenses (see `third_party/` and the upstream repos above).
+MIT, see [LICENSE](LICENSE): use it, change it, ship it, we don't mind what you do with it. The one exception is `kexts/PS5SalinaGbE`, which is GPL-2.0-only because it is a port of the Linux Ethernet driver for the PS5 (license text next to it). Third-party software (OpenCore, EDK2, Lilu, VirtualSMC, ps5-linux-loader...) is downloaded by the scripts, not included, and keeps its own license.
 
 ---
 
