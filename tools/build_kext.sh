@@ -1,9 +1,9 @@
 #!/bin/bash
-# Build kexts/PS5SalinaGbE into build/kexts/PS5SalinaGbE.kext (needs Xcode with the macOS SDK; the kext is loaded by OpenCore).
+# Build kexts/PS5SalinaGbE (or kexts/$KEXT) into build/kexts/<name>.kext (needs Xcode with the macOS SDK; the kext is loaded by OpenCore).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/kexts/PS5SalinaGbE"
-NAME=PS5SalinaGbE
+NAME="${KEXT:-PS5SalinaGbE}"        # KEXT=PS5GpuProbe builds the GPU register probe instead
+SRC="$ROOT/kexts/$NAME"
 # KEXT_SUFFIX=2 builds a copy under another class and bundle id (PS5SalinaGbE2) whose personality starts the hardware after 500 ms: load it at run time with
 # `kmutil load -p` after unloading the boot-time one, so a change does not cost a console re-jailbreak.
 if [ -n "${KEXT_SUFFIX:-}" ]; then

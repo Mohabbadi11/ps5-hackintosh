@@ -67,6 +67,11 @@ _gbe = ROOT / "build/kexts/PS5SalinaGbE.kext"
 if _gbe.exists() and os.environ.get("GBE") != "0":
     shutil.copytree(_gbe, OUT / "OC/Kexts/PS5SalinaGbE.kext")
     cfg["Kernel"]["Add"].append(kext_entry("PS5SalinaGbE.kext"))
+# GPUPROBE=1 adds the read-only GPU register probe (KEXT=PS5GpuProbe tools/build_kext.sh)
+_probe = ROOT / "build/kexts/PS5GpuProbe.kext"
+if _probe.exists() and os.environ.get("GPUPROBE") == "1":
+    shutil.copytree(_probe, OUT / "OC/Kexts/PS5GpuProbe.kext")
+    cfg["Kernel"]["Add"].append(kext_entry("PS5GpuProbe.kext"))
 # SMCProcessor lives inside the VirtualSMC release but is a separate bundle; fix its executable path when needed
 for e in cfg["Kernel"]["Add"]:
     stem = e["BundlePath"][:-5]
