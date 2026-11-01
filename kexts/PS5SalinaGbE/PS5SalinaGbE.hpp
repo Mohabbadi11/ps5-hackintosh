@@ -113,6 +113,8 @@ private:
     void setRealCommand(uint16_t bits, bool on);
     void recap();
     void publishStats();
+    void startPoller();
+    static void pollThread(void *arg);
     IOMemoryMap *mapPhys(uint64_t phys, uint64_t len, IOMemoryDescriptor **mdOut);
     IOPCIDevice *findGlue();
     bool allocDma(IOBufferMemoryDescriptor **md, size_t size, void **va, uint32_t *pa);
@@ -189,7 +191,9 @@ private:
     uint32_t pollTick = 0;
     uint32_t dbgTx = 0, dbgRx = 0, dbgTxDone = 0, errLogs = 0, lsoLogs = 0, smiTimeouts = 0;
     uint32_t isrSeen = 0, txTailSeen = 0, txStuck = 0, txOk = 0, txDrop = 0, txStall = 0, rxOk = 0, rxBad = 0, rxNoMem = 0;
-    uint32_t polls = 0, rxBurstMax = 0, rxEmptyKicks = 0, pollUs = 250, initDelayMs = 45000, rxBudget = 256;
+    uint32_t polls = 0, rxBurstMax = 0, rxEmptyKicks = 0, pollUs = 50, initDelayMs = 45000, rxBudget = 256, pollMode = 1;     // pollMode 1: a kernel thread spins (IODelay), 0: timer
+    volatile bool threadRunning = false;
+    uint64_t lastPollTsc = 0, nextSecTsc = 0, gapSumTsc = 0, gapMaxTsc = 0, gapCount = 0;
     uint32_t lastTxHead = 0, lastTxTail = 0, lastRxHead = 0, lastLink = 0, lastIsrSeen = 0;
 };
 

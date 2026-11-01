@@ -311,6 +311,7 @@ IOWorkLoop *PS5SalinaGbE::getWorkLoop() const { return ownLoop; }
 void PS5SalinaGbE::stop(IOService *provider)
 {
     running = false;
+    while (threadRunning) IOSleep(1);
     if (initTimer) initTimer->cancelTimeout();
     if (timer) timer->cancelTimeout();
     if (regs) stopDma();
@@ -719,7 +720,7 @@ IOReturn PS5SalinaGbE::enable(IONetworkInterface *iface)
     running = true;
     linkUp = false;
     linkCheck(true);
-    timer->setTimeout(pollUs, kMicrosecondScale);
+    startPoller();
     return kIOReturnSuccess;
 }
 
@@ -750,6 +751,7 @@ IOReturn PS5SalinaGbE::setProperties(OSObject *properties)
     if (!d) return kIOReturnBadArgument;
     OSNumber *n;
     if ((n = OSDynamicCast(OSNumber, d->getObject("PollUs")))) { uint32_t v = n->unsigned32BitValue(); pollUs = v < 50 ? 50 : v; LOG("PollUs %u", pollUs); }
+    if ((n = OSDynamicCast(OSNumber, d->getObject("PollMode")))) { uint32_t v = n->unsigned32BitValue() ? 1 : 0; LOG("PollMode %u", v); pollMode = v; if (running) startPoller(); }
     if ((n = OSDynamicCast(OSNumber, d->getObject("RxBudget")))) { uint32_t v = n->unsigned32BitValue(); rxBudget = v < 1 ? 1 : v; LOG("RxBudget %u", rxBudget); }
     return kIOReturnSuccess;
 }
@@ -853,6 +855,9 @@ int PS5SalinaGbE::rxPoll(int budget)
 
 void PS5SalinaGbE::poll()
 {
+    uint64_t now = __builtin_ia32_rdtsc();
+    if (lastPollTsc) { uint64_t g = now - lastPollTsc; gapSumTsc += g; gapCount++; if (g > gapMaxTsc) gapMaxTsc = g; }
+    lastPollTsc = now;
     uint32_t isr = rd(GBE_REG_ISR);
     if (isr) wr(GBE_REG_ISR, isr);
     isrSeen |= isr;
@@ -874,8 +879,8 @@ void PS5SalinaGbE::poll()
     if (txHead != txTail && txTail == txTailSeen) { if (++txStuck >= 2000) { txStuck = 0; txTimeout(); } }
     else { txStuck = 0; txTailSeen = txTail; }
 
-    if (++pollTick >= 1000) {
-        pollTick = 0;
+    if (now >= nextSecTsc) {
+        nextSecTsc = now + 1596300000ULL;
         linkCheck(false);
         status(false);
         publishStats();
@@ -908,7 +913,7 @@ void PS5SalinaGbE::publishStats()
     struct { const char *k; uint32_t v; } kv[] = {
         { "polls", polls }, { "txOk", txOk }, { "txDrop", txDrop }, { "txStall", txStall }, { "rxOk", rxOk }, { "rxBad", rxBad }, { "rxNoMem", rxNoMem },
         { "rxBurstMax", rxBurstMax }, { "rxEmptyKicks", rxEmptyKicks }, { "txHead", txHead }, { "txTail", txTail }, { "rxHead", rxHead },
-        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget },
+        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
     };
     for (auto &e : kv) {
         OSNumber *n = OSNumber::withNumber(e.v, 32);
@@ -916,7 +921,7 @@ void PS5SalinaGbE::publishStats()
     }
     setProperty("Stats", d);
     d->release();
-    rxBurstMax = 0;
+    rxBurstMax = 0; gapSumTsc = 0; gapCount = 0; gapMaxTsc = 0;
 }
 
 // one line per second, and only while something changes (the console is a TV)
@@ -931,10 +936,29 @@ void PS5SalinaGbE::status(bool force)
         txOk, txDrop, txStall, rxOk, rxBad, rxNoMem);
 }
 
+void PS5SalinaGbE::startPoller()
+{
+    if (pollMode == 1) {
+        if (!threadRunning) { threadRunning = true; IOCreateThread(PS5SalinaGbE::pollThread, this); }
+    } else {
+        timer->setTimeout(pollUs, kMicrosecondScale);
+    }
+}
+
+void PS5SalinaGbE::pollThread(void *arg)
+{
+    PS5SalinaGbE *self = (PS5SalinaGbE *)arg;
+    while (self->running && self->pollMode == 1) {
+        self->poll();
+        IODelay(self->pollUs);
+    }
+    self->threadRunning = false;
+}
+
 void PS5SalinaGbE::pollTimer(OSObject *owner, IOTimerEventSource *t)
 {
     PS5SalinaGbE *self = OSDynamicCast(PS5SalinaGbE, owner);
-    if (!self || !self->running) return;
+    if (!self || !self->running || self->pollMode != 0) return;
     self->poll();
     t->setTimeout(self->pollUs, kMicrosecondScale);
 }
