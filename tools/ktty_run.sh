@@ -5,7 +5,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source tools/lib.sh
 OC_DEBUG=1 KTTY=1 python3 tools/make_baremetal_efi.py | head -1
-# the bundle carries the memory map (RAM, reserved DMA pool); rebuild it from the payload ELF when we have it
+# The VRAM carve-out size depends on /boot/efi/vram.txt of the console: read its base from the running Linux, rebuild stage 1 if its source changed,
+# and the bundle (it carries the memory map, the reserved DMA pool and the carve-out base) from the payload ELF.
+CARVE_BASE=$(ssh "$PS5" cat /proc/iomem | python3 tools/carveout.py); export CARVE_BASE
+echo "VRAM carve-out base $CARVE_BASE"
+VMLINUZ=$(ls build/ext/vmlinuz-* 2>/dev/null | head -1)
+if [ -n "$VMLINUZ" ] && { [ ! -f build/bringup/chainV5.bzImage ] || [ bringup/stub.c -nt build/bringup/chainV5.bzImage ]; }; then bringup/build.sh "$VMLINUZ" >/dev/null; fi
 ELF=build/edk2/Build/UefiPayloadPkgX64/UniversalPayload.elf
 [ -f "$ELF" ] && python3 uefi/mkbundle.py "$ELF" build/ps5-upl.bundle >/dev/null
 python3 tools/make_welcome.py build/welcome.raw >/dev/null

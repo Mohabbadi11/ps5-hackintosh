@@ -2,9 +2,22 @@
 """Run on the console after kms_linear.py: find where the linear test framebuffer sits in the VRAM carve-out (signature
 0xDEADBE00.. at pixel (0,0)) and write that VRAM offset into the tripwire kernel patch of an OpenCore config.plist
 (the immediate of the first instruction, see bringup/tripwire/tripwire.S). Usage: patch_tripwire.py config.plist"""
-import os, plistlib, struct, sys
+import os, plistlib, re, struct, sys
 
-CARVEOUT, SIZE = 0x450000000, 0x20000000
+def carve_from_iomem():
+    """(base, size) of the VRAM carve-out: the loader grows it downward from the fixed top 0x470000000 (vram.txt), and /proc/iomem
+    lists it as a top-level 'Reserved' range ending at 0x46fffffff. 512 MB at 0x450000000 if that is not found."""
+    try:
+        for line in open("/proc/iomem"):
+            m = re.match(r"^([0-9a-f]+)-([0-9a-f]+) : Reserved", line)
+            if m and int(m.group(2), 16) == 0x46FFFFFFF:
+                base = int(m.group(1), 16)
+                return base, 0x470000000 - base
+    except OSError:
+        pass
+    return 0x450000000, 0x20000000
+
+CARVEOUT, SIZE = carve_from_iomem()
 fd = os.open("/dev/mem", os.O_RDONLY)
 pos = None
 for off in range(0, SIZE, 0x1000):

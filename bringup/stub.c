@@ -9,6 +9,11 @@ typedef unsigned char u8;
 #define MARK_ADDR  0x300000000ULL          /* 12 GiB: RAM of the crashed kernel, not owned by us */
 #define NMARK      64
 
+/* Physical base of the VRAM carve-out. The loader grows the carve-out downward from a fixed top (0x470000000): base = 0x470000000 - vram.txt size
+ * (512 MB: 0x450000000, 4 GiB: 0x370000000). The bundle header carries it (uefi/mkbundle.py), 512 MB is the default. */
+#define CARVE_TOP 0x470000000ULL
+static u64 carve_base = 0x450000000ULL;
+
 static u64 pml4[512] __attribute__((aligned(4096)));
 static u64 pdpt[512] __attribute__((aligned(4096)));
 
@@ -16,8 +21,8 @@ static void build_page_tables(void)
 {
     for (u64 g = 0; g < 64; g++) {
         u64 flags = 0x83;                            /* P | RW | PS (1 GiB) */
-        if (g == 3 || g == 17)
-            flags |= 0x18;                           /* PCD | PWT: 0xC0000000..0xFFFFFFFF and the carve-out gig */
+        if (g == 3 || (g >= 13 && g <= 17))
+            flags |= 0x18;                           /* PCD | PWT: 0xC0000000..0xFFFFFFFF and the carve-out gigs (up to 4 GiB below the top at 0x470000000) */
         pdpt[g] = (g << 30) | flags;
     }
     pml4[0] = (u64)(unsigned long)&pdpt[0] | 0x3;
@@ -89,7 +94,7 @@ static void put_hex(u64 v, int digits)
  * 0xDEADBE00.. at pixel (0,0)) on page boundaries. Returns the physical address or 0. */
 static u64 find_fb(void)
 {
-    for (u64 a = 0x450000000ULL; a < 0x470000000ULL; a += 0x1000) {
+    for (u64 a = carve_base; a < CARVE_TOP; a += 0x1000) {
         volatile u32 *p = (volatile u32 *)a;
         if (p[0] == 0xDEADBE00u && p[1] == 0xDEADBE01u && p[7] == 0xDEADBE07u) {
             fb = p;
@@ -285,6 +290,16 @@ static u64 stage6_probe(u64 realfb, u64 *info)
 #endif
 
 #if VARIANT == 5
+/* The bundle header's pad word (offset 44) holds the carve-out base in MiB; 0 keeps the 512 MB default. */
+static void carve_from_bundle(u64 bp)
+{
+    u64 img = (u64)*(volatile u32 *)(bp + 0x218) | ((u64)*(volatile u32 *)(bp + 0xC0) << 32);
+    if (img && *(volatile u64 *)img == 0x314C444E42355350ULL) {
+        u32 mib = *(volatile u32 *)(img + 44);
+        if (mib) carve_base = (u64)mib << 20;
+    }
+}
+
 static void stage5_launch(u64 bp)
 {
     u64 img = (u64)*(volatile u32 *)(bp + 0x218) | ((u64)*(volatile u32 *)(bp + 0xC0) << 32);
@@ -302,7 +317,7 @@ static void stage5_launch(u64 bp)
     u64 fbpatch = *(volatile u64 *)(img + 32);
     u32 count = *(volatile u32 *)(img + 40);
     u64 realfb = (u64)(unsigned long)fb, fbaddr = realfb;
-    *(volatile u32 *)0x63000ULL = (u32)(realfb - 0x450000000ULL);   /* VRAM offset of the picture, for bringup/tripwire */
+    *(volatile u32 *)0x63000ULL = (u32)(realfb - carve_base);   /* VRAM offset of the picture, for bringup/tripwire */
     puts_("entry "); put_hex(entry, 12); puts_("  hob list "); put_hex(rcx, 12); puts_("  rsp "); put_hex(rsp, 12);
     puts_("  segments "); put_hex(count, 2); puts_("\n");
     for (u32 i = 0; i < count; i++) {
@@ -327,12 +342,13 @@ static void stage5_launch(u64 bp)
     volatile u32 *cs = (volatile u32 *)0x300001f00ULL;
     cs[0] = 0x50354643U; cs[1] = 0; cs[2] = cy + 1; cs[3] = 0;
     *(volatile u64 *)0x300001f10ULL = fbaddr;
+    *(volatile u64 *)0x300001f20ULL = carve_base;      /* for the UEFI payload (VRAM offsets of the heartbeat marks) */
     *(volatile u32 *)0x300001f18ULL = 0;               /* console not quiet: draw the debug ring */
     /* macOS' IONDRVFramebuffer only takes a boot framebuffer that lies inside a PCI BAR of the GPU (20:00.0). BAR0 (256 MB) aliases the
      * first 256 MB of the carve-out, so when the picture is that low (bringup/tools/kms_linear.py arranges it) tell UEFI/XNU the BAR
      * address; checked by looking at the picture's signature through both. */
     u64 gopfb = fbaddr;
-    u64 vofs = realfb - 0x450000000ULL;
+    u64 vofs = realfb - carve_base;
     u64 bar0 = ((u64)pci_cfg(0x20, 0, 0, 0x14) << 32) | (pci_cfg(0x20, 0, 0, 0x10) & ~0xFULL);
     puts_("GPU BAR0 "); put_hex(bar0, 12); puts_("  picture at VRAM+"); put_hex(vofs, 8);
     if (bar0 && bar0 < 0x100000000ULL && vofs + (u64)FB_PITCH * FB_H <= 0x10000000ULL) {
@@ -560,6 +576,7 @@ void stage1_main(u64 boot_params)
 #endif
 #if VARIANT == 5
     {
+        carve_from_bundle(boot_params);
         u64 fbaddr = find_fb();
         m[n++] = fbaddr;
         if (fbaddr)

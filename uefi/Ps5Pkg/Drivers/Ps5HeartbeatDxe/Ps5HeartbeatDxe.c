@@ -13,12 +13,24 @@
 #define FB_DEFAULT  0x46a000000ULL
 #define FB_PTR      0x300001f10ULL
 #define QUIET_PTR   0x300001f18ULL
+#define CARVE_PTR   0x300001f20ULL    // physical base of the VRAM carve-out, written by stage 1 (0 = the 512 MB default)
 #define FB_PITCH    10240U
 #define COLS        320U
 #define STATUS_ROW  2U
 #define PS5_TSC_HZ  1596300000U
 
 STATIC UINT32  mTicks;
+
+STATIC
+UINT64
+CarveBase (
+  VOID
+  )
+{
+  UINT64  Base = *(volatile UINT64 *)(UINTN)CARVE_PTR;
+
+  return (Base != 0) ? Base : 0x450000000ULL;
+}
 
 //
 // Milestone squares for debugging what an OS loader's ExitBootServices does: painted through the GPU's MM_INDEX/MM_DATA
@@ -41,7 +53,7 @@ Milestone (
   }
 
   MmioWrite32 (0xE0600000ULL + 0x18, 0);
-  Offset = (UINT32)(Fb - 0x450000000ULL) + 1100 * FB_PITCH + (1000 + 160 * Index) * 4;
+  Offset = (UINT32)(Fb - CarveBase ()) + 1100 * FB_PITCH + (1000 + 160 * Index) * 4;
   for (Row = 0; Row < 64; Row++) {
     for (Pixel = 0; Pixel < 128; Pixel++) {
       MmioWrite32 (0xE0600000ULL, (Offset + Row * FB_PITCH + Pixel * 4) | 0x80000000U);
@@ -69,7 +81,7 @@ MilestoneIo (
     Fb = FB_DEFAULT;
   }
 
-  Offset = (UINT32)(Fb - 0x450000000ULL) + 1100 * FB_PITCH + (1000 + 160 * Index) * 4;
+  Offset = (UINT32)(Fb - CarveBase ()) + 1100 * FB_PITCH + (1000 + 160 * Index) * 4;
   for (Row = 0; Row < 64; Row++) {
     for (Pixel = 0; Pixel < 128; Pixel++) {
       IoWrite32 (0x2000, (Offset + Row * FB_PITCH + Pixel * 4) | 0x80000000U);

@@ -14,7 +14,7 @@ Bundle layout (little endian):
     count * { u64 dest, u64 size, u64 offset }   offset == 0xFFFF_FFFF_FFFF_FFFF means "zero-fill"
     ...    data
 """
-import argparse, struct, sys, uuid
+import argparse, os, struct, sys, uuid
 
 # ---- physical layout (all inside the crash-kernel RAM that stage 1 and the payload share) ---------------------------
 BASE        = 0x68000000          # payload image base (must match the -l used for the build: 1744830464)
@@ -26,7 +26,12 @@ STACK_SIZE  = 0x00040000
 RESERVED_LO, RESERVED_HI = BASE, BASE + 0x00A00000    # reported as allocated (BootServicesData)
 
 # ---- PS5 facts ------------------------------------------------------------------------------------------------------
-FB_BASE, FB_PITCH, FB_W, FB_H = 0x46a000000, 10240, 2560, 1440
+# The VRAM carve-out grows downward from a fixed top (vram.txt of the PS5 Linux loader): base = 0x470000000 - size. CARVE_BASE comes from the
+# console's /proc/iomem (tools/carveout.py); 0x450000000 is the 512 MB default.
+CARVE_TOP = 0x470000000
+CARVE_BASE = int(os.environ.get("CARVE_BASE", "0x450000000"), 0)
+assert CARVE_BASE % 0x100000 == 0 and 0x100000000 < CARVE_BASE < CARVE_TOP, hex(CARVE_BASE)
+FB_BASE, FB_PITCH, FB_W, FB_H = CARVE_BASE + 0x1a000000, 10240, 2560, 1440      # the picture sits at VRAM offset 0x1a000000 by default (stage 1 patches the real one)
 RSDP = 0x7fd8e014
 IOAPIC_PAGE = 0x7fd70000                          # fake I/O APIC registers, inside the reserved 0x7f9d0000-0x80000000
 ECAM_BASE, ECAM_SIZE = 0xF0000000, 0x8000000      # e820 "reserved" window, to be confirmed with MSR C001_0058
@@ -48,7 +53,7 @@ RAM = [
     (DMA_POOL[1], 0x7a000000),
     (0x7f000000, 0x7f9d0000),
     (0x100000000, 0x300000000),
-    (0x300100000, 0x450000000),   # 0x300000000-0x300100000 is the marks/log area
+    (0x300100000, CARVE_BASE),    # 0x300000000-0x300100000 is the marks/log area
     (0x470000000, 0x47f300000),
 ]
 RESERVED = [
@@ -59,7 +64,7 @@ RESERVED = [
 ]
 MMIO = ([(0x3b000000, 0x3c000000)] if MIRROR else []) + [
     (0x80000000, 0x100000000),    # PCI MMIO apertures (BARs, ECAM 0xF0000000, LAPIC): must be MMIO for PciHostBridgeDxe
-    (0x450000000, 0x470000000),   # VRAM carve-out (framebuffer lives here)
+    (CARVE_BASE, CARVE_TOP),      # VRAM carve-out (framebuffer lives here)
     (0x47f300000, 0x480000000),
 ]
 
@@ -225,7 +230,7 @@ def main():
     struct.pack_into("<I", ioapic, 0x10, 0x00170011)
     segments = [(BASE, bytes(image))] + fvdata + [(HOB_BASE, hobs), (IOAPIC_PAGE, bytes(ioapic))]
     hdr = struct.pack("<8sQQQQII", b"PS5BNDL1", BASE + entry, HOB_BASE, STACK_TOP - 0x40,
-                      HOB_BASE + FB_PATCH_OFFSET, len(segments), 0)
+                      HOB_BASE + FB_PATCH_OFFSET, len(segments), CARVE_BASE >> 20)    # pad word = carve-out base in MiB (read by stage 1)
     table_len = len(segments) * 24
     off = len(hdr) + table_len
     table, data = b"", b""

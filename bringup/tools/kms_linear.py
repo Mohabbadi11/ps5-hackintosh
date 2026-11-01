@@ -5,7 +5,7 @@ Run as root after stopping the compositor (sway). Leaves the process sleeping so
 until the machine crashes into the next stage. The first 8 pixels of row 0 are a signature (0xDEADBE00+i) so the
 buffer can be located in VRAM later.
 """
-import ctypes, fcntl, mmap, os, struct, sys, time
+import ctypes, fcntl, mmap, os, re, struct, sys, time
 
 W, H = 2560, 1440
 
@@ -75,7 +75,21 @@ def ioctl(fd, req, obj):
 
 def u32s(n): return (ctypes.c_uint32 * max(n, 1))()
 
-CARVE, CARVE_SIZE, LOW_LIMIT = 0x450000000, 0x20000000, 0x0F000000
+def carve_from_iomem():
+    """(base, size) of the VRAM carve-out: the loader grows it downward from the fixed top 0x470000000 (vram.txt), and /proc/iomem
+    lists it as a top-level 'Reserved' range ending at 0x46fffffff. 512 MB at 0x450000000 if that is not found."""
+    try:
+        for line in open("/proc/iomem"):
+            m = re.match(r"^([0-9a-f]+)-([0-9a-f]+) : Reserved", line)
+            if m and int(m.group(2), 16) == 0x46FFFFFFF:
+                base = int(m.group(1), 16)
+                return base, 0x470000000 - base
+    except OSError:
+        pass
+    return 0x450000000, 0x20000000
+
+CARVE, CARVE_SIZE = carve_from_iomem()
+LOW_LIMIT = 0x0F000000
 
 def find_vram(memfd, sig, hint):
     """VRAM offset of the buffer that starts with sig (the carve-out is system RAM): try the predicted spot, then scan from the top."""
@@ -131,6 +145,24 @@ def main():
     # 16 MB steps; fill the top with dumb buffers (held until the crash) until a new one lands low enough.
     memfd = os.open("/dev/mem", os.O_RDONLY)
     hold, hint = [], None
+    print(f"carve-out: {CARVE_SIZE >> 20} MiB at {CARVE:#x}")
+    # With a bigger carve-out (vram.txt) the 16 MB steps would take hundreds of buffers: first park big buffers on the top until only the lowest
+    # 512 MB are free, then the fine loop below. A buffer that is refused is retried at half the size.
+    bulk, chunk = 0, 0x20000000
+    while CARVE_SIZE - bulk > 0x20000000 + 0x1000000 and chunk >= 0x1000000:
+        take = min(chunk, CARVE_SIZE - bulk - 0x20000000)
+        d = CreateDumb(); d.width, d.height, d.bpp = 8192, take // (8192 * 4), 32
+        try:
+            ioctl(fd, CREATE_DUMB, d)
+        except OSError as e:
+            print(f"bulk buffer of {take >> 20} MiB refused ({e}); trying {chunk >> 21} MiB")
+            chunk //= 2
+            continue
+        hold.append((d, None))
+        bulk += d.size
+    if bulk:
+        hint = CARVE_SIZE - bulk - 0x1000000
+        print(f"{len(hold)} bulk buffers hold {bulk >> 20} MiB at the top of the carve-out")
     for n in range(48):
         d = CreateDumb(); d.width, d.height, d.bpp = W, H, 32
         ioctl(fd, CREATE_DUMB, d)
