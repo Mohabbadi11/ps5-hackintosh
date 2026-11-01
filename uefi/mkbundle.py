@@ -35,12 +35,17 @@ import os
 MIRROR = os.environ.get("MIRROR") == "1"       # stage 1 built with -DMIRROR: framebuffer alias in RAM below 4 GiB
 MIRROR_LO, MIRROR_HI = (0x3b000000, 0x3c000000) if MIRROR else (0x40000000, 0x40000000)
 
+# 2 MiB of Linux's own RAM that macOS never gets: the DMA pool of the Salina Ethernet kext. The console's southbridge DMA may only reach memory
+# that Linux used (the low 0x01000000-0x3fffffff range is e820-reserved there); the kext maps this window directly (kexts/PS5SalinaGbE).
+DMA_POOL = (0x70000000, 0x70200000)
+
 # RAM handed to UEFI (and later macOS). Taken from the stock Arch kernel's e820 map, minus what stage 1 uses.
 RAM = [
     (0x00100000, MIRROR_LO),      # 0x01000000-0x3fffffff is e820-reserved but real, writable DRAM: macOS needs RAM in the kernel slide range
     (MIRROR_HI, 0x60000000),      # with MIRROR=1, 0x3b000000-0x3c000000 is the framebuffer alias (see MMIO)
     (0x60c00000, 0x62800000),
-    (0x64829000, 0x7a000000),     # includes the payload area; the top 0x7a000000-0x7f000000 holds kexec's segments
+    (0x64829000, DMA_POOL[0]),    # includes the payload area; the top 0x7a000000-0x7f000000 holds kexec's segments
+    (DMA_POOL[1], 0x7a000000),
     (0x7f000000, 0x7f9d0000),
     (0x100000000, 0x300000000),
     (0x300100000, 0x450000000),   # 0x300000000-0x300100000 is the marks/log area
@@ -50,6 +55,7 @@ RESERVED = [
     (0x7a000000, 0x7f000000),     # stage 1 + kexec segments (kernel image, boot_params, initrd)
     (0x7f9d0000, 0x80000000),     # firmware, ACPI tables (RSDP 0x7fd8e014), NVS
     (0x300000000, 0x300100000),   # stage-1 marks and console log
+    DMA_POOL,                     # the NIC's DMA pool
 ]
 MMIO = ([(0x3b000000, 0x3c000000)] if MIRROR else []) + [
     (0x80000000, 0x100000000),    # PCI MMIO apertures (BARs, ECAM 0xF0000000, LAPIC): must be MMIO for PciHostBridgeDxe

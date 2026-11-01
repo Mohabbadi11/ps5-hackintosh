@@ -10,6 +10,9 @@ cd "$(dirname "$0")/.."
 source tools/lib.sh
 export CPUS="${CPUS:-2}"
 QUIET=1 OC_DEBUG=1 python3 tools/make_baremetal_efi.py | head -1
+# the bundle carries the memory map (RAM, reserved DMA pool); rebuild it from the payload ELF when we have it
+ELF=build/edk2/Build/UefiPayloadPkgX64/UniversalPayload.elf
+[ -f "$ELF" ] && python3 uefi/mkbundle.py "$ELF" build/ps5-upl.bundle >/dev/null
 python3 tools/make_welcome.py build/welcome.raw >/dev/null
 (cd build/baremetal-efi && tar -cf ../baremetal-efi.tar EFI)
 scp -q build/baremetal-efi.tar build/ps5-upl.bundle build/bringup/chainV5.bzImage bringup/tools/patch_tripwire.py bringup/tools/run_stage.sh bringup/tools/kms_linear.py build/welcome.raw $PS5:/root/

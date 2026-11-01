@@ -66,6 +66,8 @@
 #define GBE_TX_SCRATCH_SIZE  0xa0000u
 #define GBE_RX_POOL_SIZE     (GBE_RING_SIZE * GBE_DESC_RX_LEN)
 #define GBE_MAX_FRAME        1536u
+#define GBE_DMA_POOL_PA      0x70000000ULL   // 2 MiB of Linux's RAM reserved in uefi/mkbundle.py (DMA_POOL): the southbridge DMA reaches it
+#define GBE_DMA_POOL_SIZE    0x200000ULL
 
 struct GbeDesc {
     uint32_t flags, buf_addr, word2, word3;
@@ -106,6 +108,9 @@ private:
 
     // setup
     uint32_t sfcRead(uint16_t rid, uint32_t reg);
+    void sfcWrite(uint16_t rid, uint32_t reg, uint32_t val);
+    void setRealCommand(uint16_t bits, bool on);
+    void recap();
     IOMemoryMap *mapPhys(uint64_t phys, uint64_t len, IOMemoryDescriptor **mdOut);
     IOPCIDevice *findGlue();
     bool allocDma(IOBufferMemoryDescriptor **md, size_t size, void **va, uint32_t *pa);
@@ -163,6 +168,8 @@ private:
     OSDictionary *mediumDict = nullptr;
     const IONetworkMedium *autoMedium = nullptr;     // the 1000BaseT-FD entry of mediumDict, reported as the active medium
 
+    IOMemoryDescriptor *poolMd = nullptr;
+    IOMemoryMap *poolMap = nullptr;
     IOBufferMemoryDescriptor *txRingMd = nullptr, *rxRingMd = nullptr, *txScratchMd = nullptr, *rxPoolMd = nullptr;
     GbeDesc *txRing = nullptr, *rxRing = nullptr;
     uint8_t *txScratch = nullptr, *rxPool = nullptr;
@@ -171,6 +178,11 @@ private:
 
     IOEthernetAddress mac;
     uint32_t chipId = 0, chipRev = 0;
+    uint16_t nicRid = 0, glueRid = 0;
+    uint64_t nicBar0Real = 0, glueBar4Real = 0;
+    bool recapDone = false;
+    uint32_t recapSecs = 0;
+    uint32_t txTimeoutLogs = 0;
     bool running = false, linkUp = false;
     uint32_t pollTick = 0;
     uint32_t dbgTx = 0, dbgRx = 0, dbgTxDone = 0, errLogs = 0, lsoLogs = 0, smiTimeouts = 0;

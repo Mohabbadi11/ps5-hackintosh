@@ -47,6 +47,40 @@ uint32_t PS5SalinaGbE::sfcRead(uint16_t rid, uint32_t reg)
     return 0xFFFFFFFF;
 }
 
+void PS5SalinaGbE::sfcWrite(uint16_t rid, uint32_t reg, uint32_t val)
+{
+    if (!ecamMap) return;
+    volatile uint8_t *e = (volatile uint8_t *)ecamMap->getVirtualAddress();
+    uint32_t busno = (rid >> 8) & 0xff, slot = (rid & 0xff) >> 3, func = rid & 7;
+    if (busno == 0 || busno == 32) {
+        OSWriteLittleInt32((volatile void *)e, 0xd90, 4);
+        OSWriteLittleInt32((volatile void *)e, 0xd80, (32u << 24) | (slot << 19) | (func << 16) | (reg & 0xf80));
+        OSWriteLittleInt32((volatile void *)e, (reg & 0x7f) | 0xf80, val);
+    } else if (busno < 32) {
+        OSWriteLittleInt32((volatile void *)e, 0xd10, busno == 1 ? 4 : 5);
+        OSWriteLittleInt32((volatile void *)e, 0xd00, (busno << 24) | (slot << 19) | (func << 16) | (reg & 0xf80));
+        OSWriteLittleInt32((volatile void *)e, (reg & 0x7f) | 0xf00, val);
+    }
+}
+
+// The command register (memory/bus-master enable) of the REAL function: the proxy macOS sees does not forward it as far as we can tell.
+void PS5SalinaGbE::setRealCommand(uint16_t bits, bool on)
+{
+    if (!ecamMap || !nicRid || nicRid == 0xffff) { if (bits & 4) pci->setBusMasterEnable(on); return; }
+    uint16_t before = sfcRead(nicRid, 4) & 0xffff, cmd = on ? (before | bits) : (before & ~bits);
+    sfcWrite(nicRid, 4, cmd);                      // 32-bit write: the status half goes out as 0 (write-1-to-clear, so nothing is cleared)
+    LOG("real command %04x -> %04x (reads back %04x)", before, cmd, sfcRead(nicRid, 4) & 0xffff);
+}
+
+// Everything that matters, once, some seconds after bring-up, when the TV log has scrolled past the init lines.
+void PS5SalinaGbE::recap()
+{
+    LOG("RECAP chip %06x rev %04x mac %02x:%02x:%02x:%02x:%02x:%02x nic rid %04x glue rid %04x", chipId, chipRev, mac.bytes[0], mac.bytes[1], mac.bytes[2], mac.bytes[3], mac.bytes[4], mac.bytes[5], nicRid, glueRid);
+    LOG("RECAP nic bar0 %llx glue bar4 %llx real cmd %04x proxy cmd %04x tx ring %08x rx ring %08x", (unsigned long long)nicBar0Real, (unsigned long long)glueBar4Real,
+        sfcRead(nicRid, 4) & 0xffff, pci->configRead16(kIOPCIConfigCommand), txRingPa, rxRingPa);
+    LOG("RECAP regs 04 %08x 08 %08x 0c %08x 10 %08x 30 %08x 34 %08x 38 %08x 3c %08x 40 %08x 44 %08x 48 %08x 50 %08x 54 %08x", rd(4), rd(8), rd(0xc), rd(0x10), rd(0x30), rd(0x34), rd(0x38), rd(0x3c), rd(0x40), rd(0x44), rd(0x48), rd(0x50), rd(0x54));
+}
+
 IOMemoryMap *PS5SalinaGbE::mapPhys(uint64_t phys, uint64_t len, IOMemoryDescriptor **mdOut)
 {
     IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(phys, len, kIODirectionNone);
@@ -97,6 +131,20 @@ bool PS5SalinaGbE::allocDma(IOBufferMemoryDescriptor **md, size_t size, void **v
 
 bool PS5SalinaGbE::allocRings()
 {
+    // Preferred: the reserved pool in Linux's RAM (the first attempt, with buffers from the 0x01000000-0x3fffffff range, got DMA bus errors)
+    poolMd = IOMemoryDescriptor::withPhysicalAddress(GBE_DMA_POOL_PA, GBE_DMA_POOL_SIZE, kIODirectionNone);
+    poolMap = poolMd ? poolMd->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
+    if (poolMap) {
+        uint8_t *base = (uint8_t *)poolMap->getVirtualAddress();
+        bzero(base, 0x110000);
+        txRing = (GbeDesc *)base;                 txRingPa = (uint32_t)GBE_DMA_POOL_PA;
+        rxRing = (GbeDesc *)(base + 0x1000);      rxRingPa = (uint32_t)GBE_DMA_POOL_PA + 0x1000;
+        txScratch = base + 0x2000;                txScratchPa = (uint32_t)GBE_DMA_POOL_PA + 0x2000;
+        rxPool = base + 0xa2000;                  rxPoolPa = (uint32_t)GBE_DMA_POOL_PA + 0xa2000;
+        LOG("DMA pool at %08x: tx ring %08x rx ring %08x tx scratch %08x rx pool %08x", (uint32_t)GBE_DMA_POOL_PA, txRingPa, rxRingPa, txScratchPa, rxPoolPa);
+        return true;
+    }
+    LOG("DMA pool mapping failed, falling back to allocated buffers");
     void *va;
     if (!allocDma(&txRingMd, GBE_DESC_RING_BYTES, &va, &txRingPa)) return false;
     txRing = (GbeDesc *)va;
@@ -112,6 +160,8 @@ bool PS5SalinaGbE::allocRings()
 
 void PS5SalinaGbE::freeRings()
 {
+    if (poolMap) { poolMap->release(); poolMap = nullptr; }
+    if (poolMd) { poolMd->release(); poolMd = nullptr; }
     IOBufferMemoryDescriptor **all[] = { &txRingMd, &rxRingMd, &txScratchMd, &rxPoolMd };
     for (auto p : all) {
         if (*p) { (*p)->complete(); (*p)->release(); *p = nullptr; }
@@ -141,7 +191,6 @@ bool PS5SalinaGbE::start(IOService *provider)
     pci->retain();
     if (!pci->open(this)) { LOG("cannot open the PCI device"); return false; }
     LOG("pci command %04x status %04x", pci->configRead16(kIOPCIConfigCommand), pci->configRead16(kIOPCIConfigStatus));
-    pci->setBusMasterEnable(false);                          // Linux left it on, with rings armed: no DMA until enable()
     uint8_t off = 0;
     if (pci->findPCICapability(kIOPCIMSICapability, &off)) {
         uint16_t ctl = pci->configRead16(off + 2);
@@ -172,7 +221,7 @@ void PS5SalinaGbE::deferredInit()
     // 1. what macOS thinks (the proxy) and what the chip really decodes (the sfc window)
     LOG("proxy config: command %04x bar0 %08x %08x bar2 %08x bar4 %08x", pci->configRead16(kIOPCIConfigCommand), pci->configRead32(0x10), pci->configRead32(0x14), pci->configRead32(0x18), pci->configRead32(0x20));
     ecamMap = mapPhys(GBE_ECAM_BASE, 0x1000, &ecamMd);
-    uint16_t nicRid = pci->extendedConfigRead16(0x150);
+    nicRid = pci->extendedConfigRead16(0x150);
     LOG("NIC requester id %04x, ECAM map %p", nicRid, ecamMap);
     uint64_t nicBar0 = 0x85000000ULL;                     // what Linux saw (lspci) on this console: the fallback
     uint64_t glueBar4 = 0x85400000ULL;
@@ -188,13 +237,14 @@ void PS5SalinaGbE::deferredInit()
     }
     if (!glue) { LOG("glue function 104d:9107 not found"); return; }
     glue->retain();
-    uint16_t glueRid = glue->extendedConfigRead16(0x150);
+    glueRid = glue->extendedConfigRead16(0x150);
     LOG("glue requester id %04x", glueRid);
     if (ecamMap && glueRid && glueRid != 0xffff) {
         uint32_t lo = sfcRead(glueRid, 0x20), hi = sfcRead(glueRid, 0x24);
         LOG("glue real config: bar0 %08x bar2 %08x bar4 %08x %08x", sfcRead(glueRid, 0x10), sfcRead(glueRid, 0x18), lo, hi);
         if (lo != 0xffffffff && (lo & 0xf) == 0xc) glueBar4 = ((uint64_t)hi << 32) | (lo & ~0xfu);
     }
+    nicBar0Real = nicBar0; glueBar4Real = glueBar4;
     LOG("using NIC BAR0 %llx, glue BAR4 %llx", (unsigned long long)nicBar0, (unsigned long long)glueBar4);
 
     regMap = mapPhys(nicBar0, 0x1000, &regMd);
@@ -207,7 +257,9 @@ void PS5SalinaGbE::deferredInit()
     LOG("probe reads: nic 0x04 %08x, glue 0x4000 %08x", probeNic, probeGlue);
     if (probeNic == 0xffffffff || probeGlue == 0xffffffff) { LOG("the registers do not answer: not attaching an interface"); return; }
 
-    // Linux left the chip running with its rings armed: mask and stop it (no reset here)
+    // Linux left the chip running with its rings armed: no DMA from it until enable()
+    setRealCommand(0x4, false);
+    // mask and stop it (no reset here)
     LOG("DMA state as found: tx ctl %08x rx ctl %08x tx base %08x cur %08x rx base %08x cur %08x imr %08x isr %08x", rd(0x34), rd(0x38), rd(0x44), rd(0x3c), rd(0x48), rd(0x40), rd(0x54), rd(0x50));
     stopDma();
     wr(GBE_REG_ISR, rd(GBE_REG_ISR));
@@ -602,7 +654,7 @@ void PS5SalinaGbE::ringsHw()
     wr(GBE_REG_RX_RING_CUR, rxRingPa);
     clrBits(GBE_REG_TXKICK, 1u << 6);                          // toggle bit 6: clears a stale LSO cause
     setBits(GBE_REG_TXKICK, 1u << 6);
-    pci->setBusMasterEnable(true);                             // only now, with both rings programmed
+    setRealCommand(0x6, true);                                 // memory + bus master of the real function, only now that both rings are programmed
     setBits(GBE_REG_TX_DMA_CTRL, 1);
     setBits(GBE_REG_RX_DMA_CTRL, 1);
     wr(GBE_REG_ISR, rd(GBE_REG_ISR));
@@ -804,13 +856,18 @@ void PS5SalinaGbE::poll()
     if (txHead != txTail && txTail == txTailSeen) { if (++txStuck >= 2000) { txStuck = 0; txTimeout(); } }
     else { txStuck = 0; txTailSeen = txTail; }
 
-    if (++pollTick >= 1000) { pollTick = 0; linkCheck(false); status(false); }
+    if (++pollTick >= 1000) {
+        pollTick = 0;
+        linkCheck(false);
+        status(false);
+        if (!recapDone && ++recapSecs >= 12) { recapDone = true; recap(); }
+    }
 }
 
 // a transmit that never completes for 2 s: stop the TX engine, rebuild the ring (gbe_tx_timeout)
 void PS5SalinaGbE::txTimeout()
 {
-    LOG("TX timeout: head %u tail %u, rebuilding the ring", txHead, txTail);
+    if (txTimeoutLogs++ < 3) LOG("TX timeout: head %u tail %u, rebuilding the ring", txHead, txTail);
     IOSimpleLockLock(lock);
     setBits(GBE_REG_TX_DMA_CTRL, GBE_DMA_STOP);
     for (int i = 0; i < 1000 && (rd(GBE_REG_TX_DMA_CTRL) & GBE_DMA_STOP); i++) IODelay(1);
