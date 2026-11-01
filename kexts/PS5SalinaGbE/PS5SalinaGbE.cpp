@@ -15,6 +15,16 @@ static const uint8_t calLut[64] = {
     0x13, 0x12, 0x11, 0x10, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
+// Copy out of the (uncached) DMA pool with plain 64-bit loads: the kernel's bcopy uses 'rep movs', which on uncached memory can fall to byte accesses.
+inline void PS5SalinaGbE::copyFromPool(void *dst, const volatile void *src, size_t len)
+{
+    volatile const uint64_t *s = (volatile const uint64_t *)src;
+    uint64_t *d = (uint64_t *)dst;
+    size_t n = len / 8;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    if (len & 7) { volatile const uint8_t *sb = (volatile const uint8_t *)src + n * 8; uint8_t *db = (uint8_t *)dst + n * 8; for (size_t i = 0; i < (len & 7); i++) db[i] = sb[i]; }
+}
+
 // ---------------------------------------------------------------------------------------------------------------- life cycle
 
 bool PS5SalinaGbE::init(OSDictionary *properties)
@@ -224,6 +234,61 @@ void PS5SalinaGbE::probeTimerFired(OSObject *owner, IOTimerEventSource *t)
     if (!self) return;
     self->probeXhci();
     if (self->probeRound < 150) t->setTimeoutMS(100);
+}
+
+// Live diagnostics, triggered from user space (tools/ps5ctl CacheBench 1 / AllocProbe 8), results in the IORegistry.
+// CacheBench: read speed of the DMA pool when mapped with each cache mode (one 8-byte load per cache line and a 64-bit sequential read), MB/s.
+void PS5SalinaGbE::cacheBench()
+{
+    struct { const char *name; IOOptionBits opt; } modes[] = {
+        { "default", kIOMapDefaultCache }, { "inhibit", kIOMapInhibitCache }, { "writethru", kIOMapWriteThruCache },
+        { "copyback", kIOMapCopybackCache }, { "copybackinner", kIOMapCopybackInnerCache }, { "writecombine", kIOMapWriteCombineCache },
+    };
+    OSDictionary *res = OSDictionary::withCapacity(16);
+    if (!res) return;
+    for (auto &m : modes) {
+        IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(GBE_DMA_POOL_PA + 0x80000, 0x40000, kIODirectionNone);
+        IOMemoryMap *map = md ? md->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapReadOnly | m.opt) : nullptr;
+        for (int pass = 0; pass < 2 && map; pass++) {
+            volatile const uint8_t *p = (volatile const uint8_t *)map->getVirtualAddress();
+            volatile uint64_t sink = 0;
+            uint64_t t0 = __builtin_ia32_rdtsc();
+            if (pass == 0) { for (size_t i = 0; i < 0x40000; i += 64) sink += *(volatile const uint64_t *)(p + i); }
+            else { for (size_t i = 0; i < 0x40000; i += 8) sink += *(volatile const uint64_t *)(p + i); }
+            uint64_t cyc = __builtin_ia32_rdtsc() - t0;
+            uint32_t mbps = cyc ? (uint32_t)((uint64_t)0x40000 * 1596ULL / cyc) : 0;
+            char key[40];
+            snprintf(key, sizeof(key), "%s_%s", m.name, pass == 0 ? "line" : "seq");
+            OSNumber *nn = OSNumber::withNumber(mbps, 32);
+            if (nn) { res->setObject(key, nn); nn->release(); }
+        }
+        if (map) map->release();
+        if (md) md->release();
+    }
+    setProperty("CacheBench", res);
+    res->release();
+}
+
+// AllocProbe: n contiguous 1 MiB allocations below 4 GiB, their physical addresses (MiB units) published: where does the allocator put DMA memory?
+void PS5SalinaGbE::allocProbe(uint32_t n)
+{
+    if (n > 32) n = 32;
+    IOBufferMemoryDescriptor *bufs[32] = {};
+    OSDictionary *res = OSDictionary::withCapacity(40);
+    if (!res) return;
+    for (uint32_t i = 0; i < n; i++) {
+        bufs[i] = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous, 0x100000, 0x00000000FFFFF000ULL);
+        if (!bufs[i] || bufs[i]->prepare() != kIOReturnSuccess) continue;
+        IOByteCount seg = 0;
+        uint64_t pa = bufs[i]->getPhysicalSegment(0, &seg, kIOMemoryMapperNone);
+        char key[16];
+        snprintf(key, sizeof(key), "a%u", i);
+        OSNumber *nn = OSNumber::withNumber((uint32_t)(pa >> 20), 32);
+        if (nn) { res->setObject(key, nn); nn->release(); }
+    }
+    for (uint32_t i = 0; i < n; i++) if (bufs[i]) { bufs[i]->complete(); bufs[i]->release(); }
+    setProperty("AllocProbeMiB", res);
+    res->release();
 }
 
 void PS5SalinaGbE::probeXhci()
@@ -838,6 +903,8 @@ IOReturn PS5SalinaGbE::setProperties(OSObject *properties)
     OSNumber *n;
     if ((n = OSDynamicCast(OSNumber, d->getObject("PollUs")))) { uint32_t v = n->unsigned32BitValue(); pollUs = v < 50 ? 50 : v; LOG("PollUs %u", pollUs); }
     if ((n = OSDynamicCast(OSNumber, d->getObject("PollMode")))) { uint32_t v = n->unsigned32BitValue() ? 1 : 0; LOG("PollMode %u", v); pollMode = v; if (running) startPoller(); }
+    if ((n = OSDynamicCast(OSNumber, d->getObject("CacheBench")))) cacheBench();
+    if ((n = OSDynamicCast(OSNumber, d->getObject("AllocProbe")))) allocProbe(n->unsigned32BitValue());
     if ((n = OSDynamicCast(OSNumber, d->getObject("RxBudget")))) { uint32_t v = n->unsigned32BitValue(); rxBudget = v < 1 ? 1 : v; LOG("RxBudget %u", rxBudget); }
     return kIOReturnSuccess;
 }
@@ -919,7 +986,7 @@ int PS5SalinaGbE::rxPoll(int budget)
         if (len >= 60 && len <= GBE_DESC_RX_LEN) {
             mbuf_t pkt = allocatePacket(len);
             if (pkt) {
-                memcpy(mbuf_data(pkt), rxPool + i * GBE_DESC_RX_LEN, len);
+                copyFromPool(mbuf_data(pkt), rxPool + i * GBE_DESC_RX_LEN, len);
                 netif->inputPacket(pkt, len, IONetworkInterface::kInputOptionQueuePacket);
                 rxOk++;
             } else rxNoMem++;
@@ -1001,7 +1068,7 @@ void PS5SalinaGbE::publishStats()
     struct { const char *k; uint32_t v; } kv[] = {
         { "polls", polls }, { "txOk", txOk }, { "txDrop", txDrop }, { "txStall", txStall }, { "rxOk", rxOk }, { "rxBad", rxBad }, { "rxNoMem", rxNoMem },
         { "rxBurstMax", rxBurstMax }, { "rxEmptyKicks", rxEmptyKicks }, { "txHead", txHead }, { "txTail", txTail }, { "rxHead", rxHead },
-        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "poolReadMBps", poolCopyMBps }, { "ramReadMBps", ramCopyMBps }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
+        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "xhciCmd", probeLast[0] }, { "xhciSts", probeLast[1] }, { "xhciDcbaap", probeLast[2] }, { "xhciCrcr", probeLast[3] }, { "xhciErstba", probeLast[4] }, { "xhciPci", probeLast[5] }, { "poolReadMBps", poolCopyMBps }, { "ramReadMBps", ramCopyMBps }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
     };
     for (auto &e : kv) {
         OSNumber *n = OSNumber::withNumber(e.v, 32);

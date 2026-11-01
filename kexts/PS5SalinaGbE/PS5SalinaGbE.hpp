@@ -116,6 +116,9 @@ private:
     void recap();
     void publishStats();
     void probeXhci();
+    void cacheBench();
+    void allocProbe(uint32_t n);
+    static inline void copyFromPool(void *dst, const volatile void *src, size_t len);
     static void probeTimerFired(OSObject *owner, IOTimerEventSource *t);
     void startPoller();
     static void pollThread(void *arg);
