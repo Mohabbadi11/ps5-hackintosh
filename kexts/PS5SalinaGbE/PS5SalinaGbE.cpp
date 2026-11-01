@@ -139,8 +139,43 @@ bool PS5SalinaGbE::allocDma(IOBufferMemoryDescriptor **md, size_t size, void **v
     return true;
 }
 
+// The DMA pool wants ordinary (cacheable) RAM that the southbridge can reach: the 0x40000000-0x5fffffff block Linux used. IOKit hands out
+// contiguous memory from low to high (the AllocProbe diagnostic shows 0x25800000, 0x25900000, ...), so allocate and hold 2 MiB chunks until one
+// lands in the good block, keep that one as the pool and give the rest back.
+bool PS5SalinaGbE::allocHighPool()
+{
+    const size_t size = GBE_DMA_POOL_SIZE;
+    const uint64_t lo = 0x40000000ULL, hi = 0x5fe00000ULL;
+    IOBufferMemoryDescriptor *held[700];
+    uint32_t nheld = 0;
+    IOBufferMemoryDescriptor *got = nullptr;
+    for (uint32_t tries = 0; tries < 700 && !got; tries++) {
+        IOBufferMemoryDescriptor *b = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous, size, 0x00000000FFFFF000ULL);
+        if (!b) break;
+        if (b->prepare() != kIOReturnSuccess) { b->release(); break; }
+        IOByteCount seg = 0;
+        uint64_t pa = b->getPhysicalSegment(0, &seg, kIOMemoryMapperNone);
+        if (seg >= size && pa >= lo && pa + size <= hi) { got = b; poolHighPa = pa; break; }
+        held[nheld++] = b;
+    }
+    for (uint32_t i = 0; i < nheld; i++) { held[i]->complete(); held[i]->release(); }
+    LOG("high pool: %s after holding %u chunks (pa %llx)", got ? "found" : "NOT found", nheld, (unsigned long long)poolHighPa);
+    if (!got) return false;
+    highMd = got;
+    uint8_t *base = (uint8_t *)got->getBytesNoCopy();
+    bzero(base, size);
+    uint32_t pa = (uint32_t)poolHighPa;
+    txRing = (GbeDesc *)base;                 txRingPa = pa;
+    rxRing = (GbeDesc *)(base + 0x1000);      rxRingPa = pa + 0x1000;
+    txScratch = base + 0x5000;                txScratchPa = pa + 0x5000;
+    rxPool = base + 0x80000;                  rxPoolPa = pa + 0x80000;
+    LOG("DMA pool (cacheable) at %08x: tx ring %08x rx ring %08x tx scratch %08x rx pool %08x", pa, txRingPa, rxRingPa, txScratchPa, rxPoolPa);
+    return true;
+}
+
 bool PS5SalinaGbE::allocRings()
 {
+    if (poolPreferHigh && allocHighPool()) return true;
     // Preferred: the reserved pool in Linux's RAM (the first attempt, with buffers from the 0x01000000-0x3fffffff range, got DMA bus errors)
     poolMd = IOMemoryDescriptor::withPhysicalAddress(GBE_DMA_POOL_PA, GBE_DMA_POOL_SIZE, kIODirectionNone);
     // cacheable (write-back): the default for pages XNU does not manage is uncached, and copying frames out of uncached memory capped RX at ~2k packets/s
@@ -171,6 +206,7 @@ bool PS5SalinaGbE::allocRings()
 
 void PS5SalinaGbE::freeRings()
 {
+    if (highMd) { highMd->complete(); highMd->release(); highMd = nullptr; }
     if (poolMap) { poolMap->release(); poolMap = nullptr; }
     if (poolMd) { poolMd->release(); poolMd = nullptr; }
     IOBufferMemoryDescriptor **all[] = { &txRingMd, &rxRingMd, &txScratchMd, &rxPoolMd };
@@ -986,7 +1022,7 @@ int PS5SalinaGbE::rxPoll(int budget)
         if (len >= 60 && len <= GBE_DESC_RX_LEN) {
             mbuf_t pkt = allocatePacket(len);
             if (pkt) {
-                copyFromPool(mbuf_data(pkt), rxPool + i * GBE_DESC_RX_LEN, len);
+                if (highMd) memcpy(mbuf_data(pkt), rxPool + i * GBE_DESC_RX_LEN, len); else copyFromPool(mbuf_data(pkt), rxPool + i * GBE_DESC_RX_LEN, len);
                 netif->inputPacket(pkt, len, IONetworkInterface::kInputOptionQueuePacket);
                 rxOk++;
             } else rxNoMem++;
@@ -1068,7 +1104,7 @@ void PS5SalinaGbE::publishStats()
     struct { const char *k; uint32_t v; } kv[] = {
         { "polls", polls }, { "txOk", txOk }, { "txDrop", txDrop }, { "txStall", txStall }, { "rxOk", rxOk }, { "rxBad", rxBad }, { "rxNoMem", rxNoMem },
         { "rxBurstMax", rxBurstMax }, { "rxEmptyKicks", rxEmptyKicks }, { "txHead", txHead }, { "txTail", txTail }, { "rxHead", rxHead },
-        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "xhciCmd", probeLast[0] }, { "xhciSts", probeLast[1] }, { "xhciDcbaap", probeLast[2] }, { "xhciCrcr", probeLast[3] }, { "xhciErstba", probeLast[4] }, { "xhciPci", probeLast[5] }, { "poolReadMBps", poolCopyMBps }, { "ramReadMBps", ramCopyMBps }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
+        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "poolHighMiB", (uint32_t)(poolHighPa >> 20) }, { "xhciCmd", probeLast[0] }, { "xhciSts", probeLast[1] }, { "xhciDcbaap", probeLast[2] }, { "xhciCrcr", probeLast[3] }, { "xhciErstba", probeLast[4] }, { "xhciPci", probeLast[5] }, { "poolReadMBps", poolCopyMBps }, { "ramReadMBps", ramCopyMBps }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
     };
     for (auto &e : kv) {
         OSNumber *n = OSNumber::withNumber(e.v, 32);

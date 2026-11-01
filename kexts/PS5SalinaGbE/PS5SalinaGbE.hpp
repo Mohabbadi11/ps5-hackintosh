@@ -184,6 +184,10 @@ private:
     OSDictionary *mediumDict = nullptr;
     const IONetworkMedium *autoMedium = nullptr;     // the 1000BaseT-FD entry of mediumDict, reported as the active medium
 
+    IOBufferMemoryDescriptor *highMd = nullptr;     // cacheable pool in Linux's RAM (0x40000000-0x5fffffff), found by allocating past the low range
+    bool allocHighPool();
+    uint64_t poolHighPa = 0;
+    bool poolPreferHigh = true;
     IOMemoryDescriptor *poolMd = nullptr;
     IOMemoryMap *poolMap = nullptr;
     IOBufferMemoryDescriptor *txRingMd = nullptr, *rxRingMd = nullptr, *txScratchMd = nullptr, *rxPoolMd = nullptr;
