@@ -49,6 +49,8 @@ xcrun clang++ -arch x86_64 -mmacosx-version-min=12.0 -isysroot "$SDK" -std=c++17
     -nostdlibinc -I"$KH" -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT -c "$SRC/kmod.cpp" -o "$OUT/../kmod-$NAME.o"
 xcrun ld -arch x86_64 -kext -static -no_data_const -macos_version_min 12.0 -syslibroot "$SDK" \
     -o "$OUT/Contents/MacOS/$NAME" "$OUT/../$NAME.o" "$OUT/../kmod-$NAME.o" -lkmod -lkmodc++
+# a stack frame over 4 KiB makes clang call ___chkstk_darwin, which jumps through a pointer slot that OpenCore's linker fills with garbage: keep frames small
+if nm "$OUT/Contents/MacOS/$NAME" | grep -q "chkstk"; then echo "the kext calls ___chkstk_darwin (a big stack frame): move the array to the heap" >&2; exit 1; fi
 # a kext without kmod_info is silently skipped by the prelinker
 nm "$OUT/Contents/MacOS/$NAME" | grep -q " _kmod_info" || { echo "no kmod_info in the kext" >&2; exit 1; }
 echo "built $OUT"

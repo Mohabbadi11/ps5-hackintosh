@@ -146,10 +146,13 @@ bool PS5SalinaGbE::allocHighPool()
 {
     const size_t size = GBE_DMA_POOL_SIZE;
     const uint64_t lo = 0x40000000ULL, hi = 0x5fe00000ULL;
-    IOBufferMemoryDescriptor *held[700];
+    // heap, not stack: a frame over 4 KiB makes the compiler call ___chkstk_darwin, whose pointer slot is filled with garbage when the kext is linked by OpenCore
+    const uint32_t maxHeld = 700;
+    IOBufferMemoryDescriptor **held = (IOBufferMemoryDescriptor **)IOMalloc(maxHeld * sizeof(held[0]));
+    if (!held) return false;
     uint32_t nheld = 0;
     IOBufferMemoryDescriptor *got = nullptr;
-    for (uint32_t tries = 0; tries < 700 && !got; tries++) {
+    for (uint32_t tries = 0; tries < maxHeld && !got; tries++) {
         IOBufferMemoryDescriptor *b = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous, size, 0x00000000FFFFF000ULL);
         if (!b) break;
         if (b->prepare() != kIOReturnSuccess) { b->release(); break; }
@@ -159,6 +162,7 @@ bool PS5SalinaGbE::allocHighPool()
         held[nheld++] = b;
     }
     for (uint32_t i = 0; i < nheld; i++) { held[i]->complete(); held[i]->release(); }
+    IOFree(held, maxHeld * sizeof(held[0]));
     LOG("high pool: %s after holding %u chunks (pa %llx)", got ? "found" : "NOT found", nheld, (unsigned long long)poolHighPa);
     if (!got) return false;
     highMd = got;
