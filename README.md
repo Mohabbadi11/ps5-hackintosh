@@ -78,7 +78,7 @@ Then pick **Macintosh HD** in the OpenCore menu.
 
 ## A note on QEMU
 
-Early on we ran macOS as a **QEMU/KVM guest** on the console's own Linux (with the GPU passed through). That was never the goal, but it was a very good lab: with a working macOS next to me I could pull the kernel collection apart, compare IOKit registry trees, check what a healthy boot looks like and test ideas before touching the real hardware.
+Early on I ran macOS as a **QEMU/KVM guest** on the console's own Linux (with the GPU passed through). That was never the goal, but it was a very good lab: with a working macOS next to me I could pull the kernel collection apart, compare IOKit registry trees, check what a healthy boot looks like and test ideas before touching the real hardware.
 
 **It is not part of the boot you see here.** Nothing in the current chain starts QEMU, and macOS is not running inside any VM: the Apple kernel runs directly on the CPU, started by my own stage 1 and OpenCore (see *How it boots*). The QEMU scripts are still in the repo as research tooling, not as a way to run it.
 
