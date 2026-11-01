@@ -115,6 +115,8 @@ private:
     void setRealCommand(uint16_t bits, bool on);
     void recap();
     void publishStats();
+    void probeXhci();
+    static void probeTimerFired(OSObject *owner, IOTimerEventSource *t);
     void startPoller();
     static void pollThread(void *arg);
     IOMemoryMap *mapPhys(uint64_t phys, uint64_t len, IOMemoryDescriptor **mdOut);
@@ -167,7 +169,12 @@ private:
     IOMemoryDescriptor *regMd = nullptr, *glueMd = nullptr, *ecamMd = nullptr;
     volatile uint8_t *regs = nullptr, *glueRegs = nullptr;
     IOWorkLoop *ownLoop = nullptr;
-    IOTimerEventSource *timer = nullptr, *initTimer = nullptr;
+    IOTimerEventSource *timer = nullptr, *initTimer = nullptr, *probeTimer = nullptr;
+    IOPCIDevice *xhci = nullptr;
+    IOMemoryDescriptor *xhciMd = nullptr;
+    IOMemoryMap *xhciMap = nullptr;
+    uint32_t probeRound = 0, probeLast[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    uint16_t xhciRid = 0;
     IOEthernetInterface *netif = nullptr;
     IOBasicOutputQueue *outQueue = nullptr;
     IOSimpleLock *lock = nullptr;

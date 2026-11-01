@@ -210,8 +210,68 @@ bool PS5SalinaGbE::start(IOService *provider)
     n = OSDynamicCast(OSNumber, getProperty("PollUs"));
     if (n && n->unsigned32BitValue() >= 50) pollUs = n->unsigned32BitValue();
     initTimer->setTimeoutMS(initDelayMs);
+    probeTimer = IOTimerEventSource::timerEventSource(this, (IOTimerEventSource::Action)&PS5SalinaGbE::probeTimerFired);
+    if (probeTimer && ownLoop->addEventSource(probeTimer) == kIOReturnSuccess) probeTimer->setTimeoutMS(300);       // read-only xHCI watch while the boot looks for the root disk
     LOG("started; hardware init in %u ms, poll every %u us", initDelayMs, pollUs);
     return true;
+}
+
+// Read-only watch of the USB controller (104d:9108) during the first seconds: an intermittent boot failure ends in 'Host System Error' on it.
+// Logs one line whenever one of the values changes: USBCMD, USBSTS, DCBAAP, CRCR, ERSTBA, and the REAL PCI command/status through the sfc window.
+void PS5SalinaGbE::probeTimerFired(OSObject *owner, IOTimerEventSource *t)
+{
+    PS5SalinaGbE *self = OSDynamicCast(PS5SalinaGbE, owner);
+    if (!self) return;
+    self->probeXhci();
+    if (self->probeRound < 150) t->setTimeoutMS(100);
+}
+
+void PS5SalinaGbE::probeXhci()
+{
+    probeRound++;
+    if (!ecamMap) ecamMap = mapPhys(GBE_ECAM_BASE, 0x1000, &ecamMd);
+    if (!xhci) {
+        OSDictionary *m = IOService::serviceMatching("IOPCIDevice");
+        OSIterator *it = m ? IOService::getMatchingServices(m) : nullptr;
+        if (m) m->release();
+        if (it) {
+            OSObject *o;
+            while ((o = it->getNextObject())) {
+                IOPCIDevice *d = OSDynamicCast(IOPCIDevice, o);
+                if (d && d->configRead16(kIOPCIConfigVendorID) == 0x104d && d->configRead16(kIOPCIConfigDeviceID) == 0x9108) { xhci = d; xhci->retain(); break; }
+            }
+            it->release();
+        }
+        if (xhci) {
+            xhciRid = xhci->extendedConfigRead16(0x150);
+            uint64_t bar = xhci->configRead32(0x10) & ~0xfu;
+            xhciMap = mapPhys(bar, 0x2000, &xhciMd);
+            LOG("probe: xHCI nub found, proxy bar0 %llx, rid %04x, map %p", (unsigned long long)bar, xhciRid, xhciMap);
+        }
+        return;
+    }
+    if (!xhciMap) return;
+    volatile uint8_t *cap = (volatile uint8_t *)xhciMap->getVirtualAddress();
+    uint32_t caplen = OSReadLittleInt32((volatile void *)cap, 0) & 0xff;
+    if (caplen < 0x10 || caplen > 0x100) caplen = 0x20;
+    volatile uint8_t *op = cap + caplen;
+    uint32_t v[8];
+    v[0] = OSReadLittleInt32((volatile void *)op, 0);                    // USBCMD
+    v[1] = OSReadLittleInt32((volatile void *)op, 4);                    // USBSTS
+    v[2] = OSReadLittleInt32((volatile void *)op, 0x30);                 // DCBAAP low
+    v[3] = OSReadLittleInt32((volatile void *)op, 0x18);                 // CRCR low
+    uint32_t rtsoff = OSReadLittleInt32((volatile void *)cap, 0x18) & ~0x1fu;
+    v[4] = rtsoff < 0x1800 ? OSReadLittleInt32((volatile void *)(cap + rtsoff), 0x30) : 0;   // IR0 ERSTBA low
+    v[5] = (ecamMap && xhciRid && xhciRid != 0xffff) ? sfcRead(xhciRid, 4) : 0xdead0000;     // real command | status
+    v[6] = OSReadLittleInt32((volatile void *)cap, 8);                   // HCSPARAMS2
+    v[7] = rtsoff < 0x1800 ? OSReadLittleInt32((volatile void *)(cap + rtsoff), 0x38) : 0;   // IR0 ERDP low
+    bool changed = probeRound <= 2;
+    for (int i = 0; i < 8; i++) if (v[i] != probeLast[i]) changed = true;
+    static int probeLogs = 0;
+    if (changed && probeLogs++ < 40) {
+        LOG("xhci t=%u cmd %08x sts %08x dcbaap %08x crcr %08x erstba %08x pci %08x hcs2 %08x erdp %08x", probeRound, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+        for (int i = 0; i < 8; i++) probeLast[i] = v[i];
+    }
 }
 
 void PS5SalinaGbE::initTimerFired(OSObject *owner, IOTimerEventSource *)
@@ -225,7 +285,7 @@ void PS5SalinaGbE::deferredInit()
     LOG("deferred init");
     // 1. what macOS thinks (the proxy) and what the chip really decodes (the sfc window)
     LOG("proxy config: command %04x bar0 %08x %08x bar2 %08x bar4 %08x", pci->configRead16(kIOPCIConfigCommand), pci->configRead32(0x10), pci->configRead32(0x14), pci->configRead32(0x18), pci->configRead32(0x20));
-    ecamMap = mapPhys(GBE_ECAM_BASE, 0x1000, &ecamMd);
+    if (!ecamMap) ecamMap = mapPhys(GBE_ECAM_BASE, 0x1000, &ecamMd);
     nicRid = pci->extendedConfigRead16(0x150);
     LOG("NIC requester id %04x, ECAM map %p", nicRid, ecamMap);
     uint64_t nicBar0 = 0x85000000ULL;                     // what Linux saw (lspci) on this console: the fallback
@@ -334,6 +394,7 @@ void PS5SalinaGbE::stop(IOService *provider)
     running = false;
     while (threadRunning) IOSleep(1);
     if (initTimer) initTimer->cancelTimeout();
+    if (probeTimer) probeTimer->cancelTimeout();
     if (timer) timer->cancelTimeout();
     if (regs) stopDma();
     if (outQueue) { outQueue->stop(); outQueue->flush(); }
@@ -344,6 +405,10 @@ void PS5SalinaGbE::stop(IOService *provider)
 
 void PS5SalinaGbE::free()
 {
+    if (probeTimer) { if (ownLoop) ownLoop->removeEventSource(probeTimer); probeTimer->release(); probeTimer = nullptr; }
+    if (xhciMap) { xhciMap->release(); xhciMap = nullptr; }
+    if (xhciMd) { xhciMd->release(); xhciMd = nullptr; }
+    if (xhci) { xhci->release(); xhci = nullptr; }
     if (initTimer) { if (ownLoop) ownLoop->removeEventSource(initTimer); initTimer->release(); initTimer = nullptr; }
     if (timer) { if (ownLoop) ownLoop->removeEventSource(timer); timer->release(); timer = nullptr; }
     if (ownLoop) { ownLoop->release(); ownLoop = nullptr; }
