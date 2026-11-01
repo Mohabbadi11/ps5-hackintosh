@@ -178,7 +178,6 @@ void PS5SalinaGbE::dumpRegs()
 
 // Nothing heavy here: start() runs while IOKit is still looking for the root disk. Only config-space checks; the hardware is touched by
 // deferredInit(), a one-shot timer some seconds later.
-#define GBE_INIT_DELAY_MS 45000
 
 bool PS5SalinaGbE::start(IOService *provider)
 {
@@ -204,8 +203,13 @@ bool PS5SalinaGbE::start(IOService *provider)
         pci->close(this);
         return false;
     }
-    initTimer->setTimeoutMS(GBE_INIT_DELAY_MS);
-    LOG("started; hardware init in %d s", GBE_INIT_DELAY_MS / 1000);
+    // tunables from the personality (Info.plist): InitDelayMs (45000 at boot, a few ms when the kext is loaded at run time), PollUs
+    OSNumber *n = OSDynamicCast(OSNumber, getProperty("InitDelayMs"));
+    if (n) initDelayMs = n->unsigned32BitValue();
+    n = OSDynamicCast(OSNumber, getProperty("PollUs"));
+    if (n && n->unsigned32BitValue() >= 50) pollUs = n->unsigned32BitValue();
+    initTimer->setTimeoutMS(initDelayMs);
+    LOG("started; hardware init in %u ms, poll every %u us", initDelayMs, pollUs);
     return true;
 }
 
@@ -715,7 +719,7 @@ IOReturn PS5SalinaGbE::enable(IONetworkInterface *iface)
     running = true;
     linkUp = false;
     linkCheck(true);
-    timer->setTimeoutMS(1);
+    timer->setTimeout(pollUs, kMicrosecondScale);
     return kIOReturnSuccess;
 }
 
@@ -738,6 +742,17 @@ IOReturn PS5SalinaGbE::setMulticastMode(bool) { return kIOReturnSuccess; }
 IOReturn PS5SalinaGbE::setMulticastList(IOEthernetAddress *, UInt32) { return kIOReturnSuccess; }
 IOReturn PS5SalinaGbE::selectMedium(const IONetworkMedium *medium) { setSelectedMedium(medium); return kIOReturnSuccess; }
 UInt32 PS5SalinaGbE::getFeatures() const { return 0; }
+
+// Run-time tunables, set from user space with tools/ps5ctl (IORegistryEntrySetCFProperties): PollUs, RxBudget.
+IOReturn PS5SalinaGbE::setProperties(OSObject *properties)
+{
+    OSDictionary *d = OSDynamicCast(OSDictionary, properties);
+    if (!d) return kIOReturnBadArgument;
+    OSNumber *n;
+    if ((n = OSDynamicCast(OSNumber, d->getObject("PollUs")))) { uint32_t v = n->unsigned32BitValue(); pollUs = v < 50 ? 50 : v; LOG("PollUs %u", pollUs); }
+    if ((n = OSDynamicCast(OSNumber, d->getObject("RxBudget")))) { uint32_t v = n->unsigned32BitValue(); rxBudget = v < 1 ? 1 : v; LOG("RxBudget %u", rxBudget); }
+    return kIOReturnSuccess;
+}
 const OSString *PS5SalinaGbE::newVendorString() const { return OSString::withCString("Sony"); }
 const OSString *PS5SalinaGbE::newModelString() const { return OSString::withCString("Salina GbE"); }
 
@@ -851,7 +866,10 @@ void PS5SalinaGbE::poll()
     if (outQueue == nullptr) outQueue = OSDynamicCast(IOBasicOutputQueue, getOutputQueue());
     if (outQueue) outQueue->service();                      // restart output that stalled on a full ring
 
-    rxPoll(64);
+    int burst = rxPoll((int)rxBudget);
+    if (burst > (int)rxBurstMax) rxBurstMax = burst;
+    if (isr & (2u | 0x20u)) { setBits(GBE_REG_RX_DMA_CTRL, GBE_DMA_KICK); rxEmptyKicks++; }      // RX_EMPTY: the engine waits for a kick
+    polls++;
 
     if (txHead != txTail && txTail == txTailSeen) { if (++txStuck >= 2000) { txStuck = 0; txTimeout(); } }
     else { txStuck = 0; txTailSeen = txTail; }
@@ -860,6 +878,7 @@ void PS5SalinaGbE::poll()
         pollTick = 0;
         linkCheck(false);
         status(false);
+        publishStats();
         if (!recapDone && ++recapSecs >= 12) { recapDone = true; recap(); }
     }
 }
@@ -881,6 +900,25 @@ void PS5SalinaGbE::txTimeout()
     IOSimpleLockUnlock(lock);
 }
 
+// Counters in the IORegistry (ioreg -c PS5SalinaGbE -l | grep -A16 Stats): the kernel log of a kext is not readable over ssh here.
+void PS5SalinaGbE::publishStats()
+{
+    OSDictionary *d = OSDictionary::withCapacity(16);
+    if (!d) return;
+    struct { const char *k; uint32_t v; } kv[] = {
+        { "polls", polls }, { "txOk", txOk }, { "txDrop", txDrop }, { "txStall", txStall }, { "rxOk", rxOk }, { "rxBad", rxBad }, { "rxNoMem", rxNoMem },
+        { "rxBurstMax", rxBurstMax }, { "rxEmptyKicks", rxEmptyKicks }, { "txHead", txHead }, { "txTail", txTail }, { "rxHead", rxHead },
+        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget },
+    };
+    for (auto &e : kv) {
+        OSNumber *n = OSNumber::withNumber(e.v, 32);
+        if (n) { d->setObject(e.k, n); n->release(); }
+    }
+    setProperty("Stats", d);
+    d->release();
+    rxBurstMax = 0;
+}
+
 // one line per second, and only while something changes (the console is a TV)
 void PS5SalinaGbE::status(bool force)
 {
@@ -898,5 +936,5 @@ void PS5SalinaGbE::pollTimer(OSObject *owner, IOTimerEventSource *t)
     PS5SalinaGbE *self = OSDynamicCast(PS5SalinaGbE, owner);
     if (!self || !self->running) return;
     self->poll();
-    t->setTimeoutMS(1);
+    t->setTimeout(self->pollUs, kMicrosecondScale);
 }

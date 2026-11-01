@@ -97,6 +97,7 @@ public:
     virtual const OSString *newModelString() const APPLE_KEXT_OVERRIDE;
     virtual IOReturn selectMedium(const IONetworkMedium *medium) APPLE_KEXT_OVERRIDE;
     virtual UInt32 getFeatures() const APPLE_KEXT_OVERRIDE;
+    virtual IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
 
 private:
     // register access
@@ -111,6 +112,7 @@ private:
     void sfcWrite(uint16_t rid, uint32_t reg, uint32_t val);
     void setRealCommand(uint16_t bits, bool on);
     void recap();
+    void publishStats();
     IOMemoryMap *mapPhys(uint64_t phys, uint64_t len, IOMemoryDescriptor **mdOut);
     IOPCIDevice *findGlue();
     bool allocDma(IOBufferMemoryDescriptor **md, size_t size, void **va, uint32_t *pa);
@@ -187,6 +189,7 @@ private:
     uint32_t pollTick = 0;
     uint32_t dbgTx = 0, dbgRx = 0, dbgTxDone = 0, errLogs = 0, lsoLogs = 0, smiTimeouts = 0;
     uint32_t isrSeen = 0, txTailSeen = 0, txStuck = 0, txOk = 0, txDrop = 0, txStall = 0, rxOk = 0, rxBad = 0, rxNoMem = 0;
+    uint32_t polls = 0, rxBurstMax = 0, rxEmptyKicks = 0, pollUs = 250, initDelayMs = 45000, rxBudget = 256;
     uint32_t lastTxHead = 0, lastTxTail = 0, lastRxHead = 0, lastLink = 0, lastIsrSeen = 0;
 };
 
