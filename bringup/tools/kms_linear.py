@@ -146,24 +146,9 @@ def main():
     memfd = os.open("/dev/mem", os.O_RDONLY)
     hold, hint = [], None
     print(f"carve-out: {CARVE_SIZE >> 20} MiB at {CARVE:#x}")
-    # With a bigger carve-out (vram.txt) the 16 MB steps would take hundreds of buffers: first park big buffers on the top until only the lowest
-    # 512 MB are free, then the fine loop below. A buffer that is refused is retried at half the size.
-    bulk, chunk = 0, 0x20000000
-    while CARVE_SIZE - bulk > 0x20000000 + 0x1000000 and chunk >= 0x1000000:
-        take = min(chunk, CARVE_SIZE - bulk - 0x20000000)
-        d = CreateDumb(); d.width, d.height, d.bpp = 8192, take // (8192 * 4), 32
-        try:
-            ioctl(fd, CREATE_DUMB, d)
-        except OSError as e:
-            print(f"bulk buffer of {take >> 20} MiB refused ({e}); trying {chunk >> 21} MiB")
-            chunk //= 2
-            continue
-        hold.append((d, None))
-        bulk += d.size
-    if bulk:
-        hint = CARVE_SIZE - bulk - 0x1000000
-        print(f"{len(hold)} bulk buffers hold {bulk >> 20} MiB at the top of the carve-out")
-    for n in range(48):
+    # Big buffers are placed at the bottom of the VRAM (amdgpu hands out only the small ones from the top), so the top is filled with picture-sized
+    # buffers: a few hundred of them with a 4 GiB carve-out, each one predicted by the previous offset.
+    for n in range(CARVE_SIZE // 0x1000000 + 16):
         d = CreateDumb(); d.width, d.height, d.bpp = W, H, 32
         ioctl(fd, CREATE_DUMB, d)
         mp = MapDumb(); mp.handle = d.handle

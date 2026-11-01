@@ -13,7 +13,7 @@ pkill -u ps5 sway || true
 sleep 2
 nohup python3 /root/kms_linear.py >/root/kms.log 2>&1 &
 # wait for the picture to be on screen (a few seconds with the prepared welcome screen), not a fixed time
-for i in $(seq 1 120); do grep -q "SETCRTC done" /root/kms.log 2>/dev/null && break; sleep 0.5; done
+for i in $(seq 1 400); do grep -q "SETCRTC done" /root/kms.log 2>/dev/null && break; sleep 0.5; done
 sleep 1
 tail -1 /root/kms.log
 # a tripwire kernel patch in the OpenCore config needs this boot's framebuffer offset
