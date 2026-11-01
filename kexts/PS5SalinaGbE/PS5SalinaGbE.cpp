@@ -1072,10 +1072,15 @@ int PS5SalinaGbE::rxPoll(int budget)
             dbgRx++;
         }
         if (len >= 60 && len <= GBE_DESC_RX_LEN) {
+            uint64_t t0 = __builtin_ia32_rdtsc();
             mbuf_t pkt = allocatePacket(len);
+            uint64_t t1 = __builtin_ia32_rdtsc();
             if (pkt) {
                 if (highMd) memcpy(mbuf_data(pkt), rxPool + i * GBE_DESC_RX_LEN, len); else copyFromPool(mbuf_data(pkt), rxPool + i * GBE_DESC_RX_LEN, len);
+                uint64_t t2 = __builtin_ia32_rdtsc();
                 netif->inputPacket(pkt, len, IONetworkInterface::kInputOptionQueuePacket);
+                uint64_t t3 = __builtin_ia32_rdtsc();
+                cAlloc += t1 - t0; cCopy += t2 - t1; cInput += t3 - t2;
                 rxOk++;
             } else rxNoMem++;
         } else rxBad++;
@@ -1089,7 +1094,9 @@ int PS5SalinaGbE::rxPoll(int budget)
     rxHead = i;
     if (done) {
         setBits(GBE_REG_RX_DMA_CTRL, GBE_DMA_KICK);
+        uint64_t f0 = __builtin_ia32_rdtsc();
         netif->flushInputQueue();
+        cFlush += __builtin_ia32_rdtsc() - f0;
     }
     return done;
 }
@@ -1097,6 +1104,7 @@ int PS5SalinaGbE::rxPoll(int budget)
 void PS5SalinaGbE::poll()
 {
     uint64_t now = __builtin_ia32_rdtsc();
+    struct PollTimer { PS5SalinaGbE *s; uint64_t t0; ~PollTimer() { s->cPoll += __builtin_ia32_rdtsc() - t0; } } pollTimerGuard = { this, now };
     if (lastPollTsc) { uint64_t g = now - lastPollTsc; gapSumTsc += g; gapCount++; if (g > gapMaxTsc) gapMaxTsc = g; }
     lastPollTsc = now;
     uint32_t isr = rd(GBE_REG_ISR);
@@ -1156,7 +1164,7 @@ void PS5SalinaGbE::publishStats()
     struct { const char *k; uint32_t v; } kv[] = {
         { "polls", polls }, { "txOk", txOk }, { "txDrop", txDrop }, { "txStall", txStall }, { "rxOk", rxOk }, { "rxBad", rxBad }, { "rxNoMem", rxNoMem },
         { "rxBurstMax", rxBurstMax }, { "rxEmptyKicks", rxEmptyKicks }, { "txHead", txHead }, { "txTail", txTail }, { "rxHead", rxHead },
-        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "poolHighMiB", (uint32_t)(poolHighPa >> 20) }, { "xhciCmd", probeLast[0] }, { "xhciSts", probeLast[1] }, { "xhciDcbaap", probeLast[2] }, { "xhciCrcr", probeLast[3] }, { "xhciErstba", probeLast[4] }, { "xhciPci", probeLast[5] }, { "poolReadMBps", poolCopyMBps }, { "ramReadMBps", ramCopyMBps }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
+        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "us_alloc", (uint32_t)(cAlloc / 1596) }, { "us_copy", (uint32_t)(cCopy / 1596) }, { "us_input", (uint32_t)(cInput / 1596) }, { "us_flush", (uint32_t)(cFlush / 1596) }, { "us_poll", (uint32_t)(cPoll / 1596) }, { "poolHighMiB", (uint32_t)(poolHighPa >> 20) }, { "xhciCmd", probeLast[0] }, { "xhciSts", probeLast[1] }, { "xhciDcbaap", probeLast[2] }, { "xhciCrcr", probeLast[3] }, { "xhciErstba", probeLast[4] }, { "xhciPci", probeLast[5] }, { "poolReadMBps", poolCopyMBps }, { "ramReadMBps", ramCopyMBps }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
     };
     for (auto &e : kv) {
         OSNumber *n = OSNumber::withNumber(e.v, 32);

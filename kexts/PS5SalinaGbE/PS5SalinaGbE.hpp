@@ -204,13 +204,15 @@ private:
     bool recapDone = false;
     uint32_t recapSecs = 0;
     uint32_t txTimeoutLogs = 0;
-    bool running = false, linkUp = false;
+    volatile bool running = false;
+    bool linkUp = false;
     uint32_t pollTick = 0;
     uint32_t dbgTx = 0, dbgRx = 0, dbgTxDone = 0, errLogs = 0, lsoLogs = 0, smiTimeouts = 0;
     uint32_t isrSeen = 0, txTailSeen = 0, txStuck = 0, txOk = 0, txDrop = 0, txStall = 0, rxOk = 0, rxBad = 0, rxNoMem = 0;
-    uint32_t polls = 0, rxBurstMax = 0, rxEmptyKicks = 0, pollUs = 250, initDelayMs = 45000, rxBudget = 256, pollMode = 0, poolCopyMBps = 0, ramCopyMBps = 0;     // pollMode 1: a kernel thread spins (IODelay), 0: timer
+    uint32_t polls = 0, rxBurstMax = 0, rxEmptyKicks = 0, pollUs = 250, initDelayMs = 45000, rxBudget = 256, pollModeUnused = 0, poolCopyMBps = 0, ramCopyMBps = 0;     // pollMode 1: a kernel thread spins (IODelay), 0: timer
     volatile bool threadRunning = false;
-    uint64_t txStuckTsc = 0;
+    volatile uint32_t pollMode = 0;
+    uint64_t txStuckTsc = 0, cAlloc = 0, cCopy = 0, cInput = 0, cFlush = 0, cPoll = 0, cTx = 0, cStatus = 0;     // cycles spent per section, published in Stats (us)
     uint64_t lastPollTsc = 0, nextSecTsc = 0, gapSumTsc = 0, gapMaxTsc = 0, gapCount = 0;
     uint32_t lastTxHead = 0, lastTxTail = 0, lastRxHead = 0, lastLink = 0, lastIsrSeen = 0;
 };
