@@ -72,6 +72,11 @@ _probe = ROOT / "build/kexts/PS5GpuProbe.kext"
 if _probe.exists() and os.environ.get("GPUPROBE") == "1":
     shutil.copytree(_probe, OUT / "OC/Kexts/PS5GpuProbe.kext")
     cfg["Kernel"]["Add"].append(kext_entry("PS5GpuProbe.kext"))
+# PS5CYAN=1 adds the Lilu plugin that blocks Apple's AMD power management (tools/build_lilu_plugin.sh builds it); it must come after Lilu
+_cyan = ROOT / "build/kexts/PS5Cyan.kext"
+if _cyan.exists() and os.environ.get("PS5CYAN") == "1":
+    shutil.copytree(_cyan, OUT / "OC/Kexts/PS5Cyan.kext")
+    cfg["Kernel"]["Add"].append(kext_entry("PS5Cyan.kext"))
 # SMCProcessor lives inside the VirtualSMC release but is a separate bundle; fix its executable path when needed
 for e in cfg["Kernel"]["Add"]:
     stem = e["BundlePath"][:-5]
