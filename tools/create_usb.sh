@@ -158,6 +158,7 @@ for i in $(seq 1 5); do [ -d "$BOOT_VOL" ] && break; sleep 1; done
 if [ -d "$BOOT_VOL" ]; then
     cp "$BUILD/bzImage" "$BOOT_VOL/"
     cp "$BUILD/initrd.img" "$BOOT_VOL/"
+    # usb/cmdline.txt carries the video mode of the author's screen (HDMI-A-1, 2560x1440@60): edit it for yours first, see the README
     cp "$PROJECT_DIR/usb/cmdline.txt" "$BOOT_VOL/"
     [ -f "$PROJECT_DIR/usb/vram.txt" ] && cp "$PROJECT_DIR/usb/vram.txt" "$BOOT_VOL/"
     echo "  bzImage + initrd.img + cmdline.txt copied"

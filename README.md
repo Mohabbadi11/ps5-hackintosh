@@ -107,6 +107,7 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 - **The internal SSD stays untouched.** macOS has an NVMe driver that would try to attach to Sony's SSD controller. I disable it (`IONVMeFamily`, *Disable*). Boot from USB.
 - Don't accept a "disk not readable, initialize?" prompt on anything you didn't create.
 - Turn **automatic updates off.** 12.7.6 is the last Monterey, and an update replaces the kernel my patches are matched to.
+- **The display is hard-wired to 2560×1440@60 over HDMI**, because that is the only mode my screen offers. Yours may offer something else (or call its connector something other than `HDMI-A-1`), so change it before your first boot: `video=` in `usb/cmdline.txt` (Linux console), `W, H` in `bringup/tools/kms_linear.py` and `tools/make_welcome.py` (the framebuffer macOS inherits), and `Resolution` in `tools/make_baremetal_efi.py` (OpenCore). The four have to agree; `usb/cmdline.txt` is a single line the kernel reads verbatim, so it cannot carry a comment saying this.
 - The IOMMU is off, so a misbehaving driver can DMA anywhere. Be careful with kexts for PCI devices you don't recognize.
 
 The repo ships no Apple software, no Sony firmware images (binary dumps are git-ignored; only my own ACPI *sources* are tracked) and no exploit code. Bring your own console, macOS install and jailbreak.
