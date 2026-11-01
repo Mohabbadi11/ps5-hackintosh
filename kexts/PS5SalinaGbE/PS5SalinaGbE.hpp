@@ -64,7 +64,9 @@
 #define GBE_RING_SIZE        256u
 #define GBE_DESC_RING_BYTES  (GBE_RING_SIZE * 16u)
 #define GBE_TX_SCRATCH_SIZE  0xa0000u
-#define GBE_RX_POOL_SIZE     (GBE_RING_SIZE * GBE_DESC_RX_LEN)
+#define GBE_RX_RING_SIZE     1024u           // as in the newer Linux driver (the ring end is only marked by GBE_DESC_WRAP)
+#define GBE_RX_RING_BYTES    (GBE_RX_RING_SIZE * 16u)
+#define GBE_RX_POOL_SIZE     (GBE_RX_RING_SIZE * GBE_DESC_RX_LEN)
 #define GBE_MAX_FRAME        1536u
 #define GBE_DMA_POOL_PA      0x70000000ULL   // 2 MiB of Linux's RAM reserved in uefi/mkbundle.py (DMA_POOL): the southbridge DMA reaches it
 #define GBE_DMA_POOL_SIZE    0x200000ULL
@@ -191,8 +193,9 @@ private:
     uint32_t pollTick = 0;
     uint32_t dbgTx = 0, dbgRx = 0, dbgTxDone = 0, errLogs = 0, lsoLogs = 0, smiTimeouts = 0;
     uint32_t isrSeen = 0, txTailSeen = 0, txStuck = 0, txOk = 0, txDrop = 0, txStall = 0, rxOk = 0, rxBad = 0, rxNoMem = 0;
-    uint32_t polls = 0, rxBurstMax = 0, rxEmptyKicks = 0, pollUs = 50, initDelayMs = 45000, rxBudget = 256, pollMode = 1;     // pollMode 1: a kernel thread spins (IODelay), 0: timer
+    uint32_t polls = 0, rxBurstMax = 0, rxEmptyKicks = 0, pollUs = 250, initDelayMs = 45000, rxBudget = 256, pollMode = 0, poolCopyMBps = 0, ramCopyMBps = 0;     // pollMode 1: a kernel thread spins (IODelay), 0: timer
     volatile bool threadRunning = false;
+    uint64_t txStuckTsc = 0;
     uint64_t lastPollTsc = 0, nextSecTsc = 0, gapSumTsc = 0, gapMaxTsc = 0, gapCount = 0;
     uint32_t lastTxHead = 0, lastTxTail = 0, lastRxHead = 0, lastLink = 0, lastIsrSeen = 0;
 };

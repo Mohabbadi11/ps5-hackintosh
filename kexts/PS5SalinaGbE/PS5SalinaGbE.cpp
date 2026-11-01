@@ -133,14 +133,15 @@ bool PS5SalinaGbE::allocRings()
 {
     // Preferred: the reserved pool in Linux's RAM (the first attempt, with buffers from the 0x01000000-0x3fffffff range, got DMA bus errors)
     poolMd = IOMemoryDescriptor::withPhysicalAddress(GBE_DMA_POOL_PA, GBE_DMA_POOL_SIZE, kIODirectionNone);
-    poolMap = poolMd ? poolMd->createMappingInTask(kernel_task, 0, kIOMapAnywhere) : nullptr;
+    // cacheable (write-back): the default for pages XNU does not manage is uncached, and copying frames out of uncached memory capped RX at ~2k packets/s
+    poolMap = poolMd ? poolMd->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapCopybackCache) : nullptr;
     if (poolMap) {
         uint8_t *base = (uint8_t *)poolMap->getVirtualAddress();
-        bzero(base, 0x110000);
+        bzero(base, GBE_DMA_POOL_SIZE);
         txRing = (GbeDesc *)base;                 txRingPa = (uint32_t)GBE_DMA_POOL_PA;
-        rxRing = (GbeDesc *)(base + 0x1000);      rxRingPa = (uint32_t)GBE_DMA_POOL_PA + 0x1000;
-        txScratch = base + 0x2000;                txScratchPa = (uint32_t)GBE_DMA_POOL_PA + 0x2000;
-        rxPool = base + 0xa2000;                  rxPoolPa = (uint32_t)GBE_DMA_POOL_PA + 0xa2000;
+        rxRing = (GbeDesc *)(base + 0x1000);      rxRingPa = (uint32_t)GBE_DMA_POOL_PA + 0x1000;       // 1024 x 16 bytes
+        txScratch = base + 0x5000;                txScratchPa = (uint32_t)GBE_DMA_POOL_PA + 0x5000;    // 0x70000: 256 frames of 0x600 at most
+        rxPool = base + 0x80000;                  rxPoolPa = (uint32_t)GBE_DMA_POOL_PA + 0x80000;      // 1024 x 0x600 up to the end of the 2 MiB
         LOG("DMA pool at %08x: tx ring %08x rx ring %08x tx scratch %08x rx pool %08x", (uint32_t)GBE_DMA_POOL_PA, txRingPa, rxRingPa, txScratchPa, rxPoolPa);
         return true;
     }
@@ -148,7 +149,7 @@ bool PS5SalinaGbE::allocRings()
     void *va;
     if (!allocDma(&txRingMd, GBE_DESC_RING_BYTES, &va, &txRingPa)) return false;
     txRing = (GbeDesc *)va;
-    if (!allocDma(&rxRingMd, GBE_DESC_RING_BYTES, &va, &rxRingPa)) return false;
+    if (!allocDma(&rxRingMd, GBE_RX_RING_BYTES, &va, &rxRingPa)) return false;
     rxRing = (GbeDesc *)va;
     if (!allocDma(&txScratchMd, GBE_TX_SCRATCH_SIZE, &va, &txScratchPa)) return false;
     txScratch = (uint8_t *)va;
@@ -278,6 +279,26 @@ void PS5SalinaGbE::deferredInit()
     dumpRegs();
 
     if (!allocRings()) { LOG("DMA allocation failed"); return; }
+
+    // how fast can the CPU read the pool, compared with ordinary RAM (MB/s)? Published in Stats.
+    {
+        const size_t n = 262144;
+        uint8_t *tmp = (uint8_t *)IOMalloc(n);
+        if (tmp) {
+            volatile uint64_t sink = 0;
+            for (int pass = 0; pass < 2; pass++) {
+                const uint8_t *src = pass == 0 ? rxPool : tmp;
+                if (pass == 1) memset(tmp, 0x5a, n);
+                uint64_t t0 = __builtin_ia32_rdtsc();
+                for (size_t i = 0; i < n; i += 64) sink += *(volatile const uint64_t *)(src + i);
+                uint64_t cyc = __builtin_ia32_rdtsc() - t0;
+                uint32_t mbps = cyc ? (uint32_t)((uint64_t)n * 1596ULL / cyc) : 0;       // bytes per us at 1596 MHz = MB/s (one 8-byte load per 64 bytes, so a lower bound)
+                if (pass == 0) poolCopyMBps = mbps; else ramCopyMBps = mbps;
+            }
+            IOFree(tmp, n);
+            LOG("read benchmark (one load per cache line): pool %u MB/s, ordinary RAM %u MB/s", poolCopyMBps, ramCopyMBps);
+        }
+    }
 
 
     mediumDict = OSDictionary::withCapacity(2);
@@ -639,12 +660,12 @@ void PS5SalinaGbE::initTxRing()
 
 void PS5SalinaGbE::rxFill()
 {
-    for (uint32_t i = 0; i < GBE_RING_SIZE; i++) {
+    for (uint32_t i = 0; i < GBE_RX_RING_SIZE; i++) {
         rxRing[i].buf_addr = rxPoolPa + i * GBE_DESC_RX_LEN;
         rxRing[i].word2 = 0;
         rxRing[i].word3 = 0;
         BARRIER();
-        rxRing[i].flags = GBE_DESC_RX_LEN | (i == GBE_RING_SIZE - 1 ? GBE_DESC_WRAP : 0);
+        rxRing[i].flags = GBE_DESC_RX_LEN | (i == GBE_RX_RING_SIZE - 1 ? GBE_DESC_WRAP : 0);
     }
     rxHead = 0;
 }
@@ -841,9 +862,9 @@ int PS5SalinaGbE::rxPoll(int budget)
         rxRing[i].word2 = 0;
         rxRing[i].word3 = 0;
         BARRIER();
-        rxRing[i].flags = GBE_DESC_RX_LEN | (i == GBE_RING_SIZE - 1 ? GBE_DESC_WRAP : 0);
+        rxRing[i].flags = GBE_DESC_RX_LEN | (i == GBE_RX_RING_SIZE - 1 ? GBE_DESC_WRAP : 0);
         done++;
-        i = (i + 1) % GBE_RING_SIZE;
+        i = (i + 1) % GBE_RX_RING_SIZE;
     }
     rxHead = i;
     if (done) {
@@ -866,7 +887,7 @@ void PS5SalinaGbE::poll()
 
     IOSimpleLockLock(lock);
     txComplete();
-    setBits(GBE_REG_TX_DMA_CTRL, GBE_DMA_KICK);
+    if (txTail != txHead) setBits(GBE_REG_TX_DMA_CTRL, GBE_DMA_KICK);
     IOSimpleLockUnlock(lock);
     if (outQueue == nullptr) outQueue = OSDynamicCast(IOBasicOutputQueue, getOutputQueue());
     if (outQueue) outQueue->service();                      // restart output that stalled on a full ring
@@ -876,8 +897,10 @@ void PS5SalinaGbE::poll()
     if (isr & (2u | 0x20u)) { setBits(GBE_REG_RX_DMA_CTRL, GBE_DMA_KICK); rxEmptyKicks++; }      // RX_EMPTY: the engine waits for a kick
     polls++;
 
-    if (txHead != txTail && txTail == txTailSeen) { if (++txStuck >= 2000) { txStuck = 0; txTimeout(); } }
-    else { txStuck = 0; txTailSeen = txTail; }
+    if (txHead != txTail && txTail == txTailSeen) {
+        if (!txStuckTsc) txStuckTsc = now;
+        else if (now - txStuckTsc > 3192600000ULL) { txStuckTsc = 0; txTimeout(); }          // 2 s without a completion
+    } else { txStuckTsc = 0; txTailSeen = txTail; }
 
     if (now >= nextSecTsc) {
         nextSecTsc = now + 1596300000ULL;
@@ -913,7 +936,7 @@ void PS5SalinaGbE::publishStats()
     struct { const char *k; uint32_t v; } kv[] = {
         { "polls", polls }, { "txOk", txOk }, { "txDrop", txDrop }, { "txStall", txStall }, { "rxOk", rxOk }, { "rxBad", rxBad }, { "rxNoMem", rxNoMem },
         { "rxBurstMax", rxBurstMax }, { "rxEmptyKicks", rxEmptyKicks }, { "txHead", txHead }, { "txTail", txTail }, { "rxHead", rxHead },
-        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
+        { "txTimeouts", txTimeoutLogs }, { "isrSeen", isrSeen }, { "link", rd(GBE_REG_LINK) }, { "pollUs", pollUs }, { "rxBudget", rxBudget }, { "pollMode", pollMode }, { "poolReadMBps", poolCopyMBps }, { "ramReadMBps", ramCopyMBps }, { "pollGapAvgUs", gapCount ? (uint32_t)(gapSumTsc / gapCount / 1596) : 0 }, { "pollGapMaxUs", (uint32_t)(gapMaxTsc / 1596) },
     };
     for (auto &e : kv) {
         OSNumber *n = OSNumber::withNumber(e.v, 32);
@@ -959,6 +982,6 @@ void PS5SalinaGbE::pollTimer(OSObject *owner, IOTimerEventSource *t)
 {
     PS5SalinaGbE *self = OSDynamicCast(PS5SalinaGbE, owner);
     if (!self || !self->running || self->pollMode != 0) return;
+    t->setTimeout(self->pollUs, kMicrosecondScale);       // re-arm first: the poll's own time must not be added to the gap
     self->poll();
-    t->setTimeout(self->pollUs, kMicrosecondScale);
 }
