@@ -25,7 +25,7 @@
 | 🖥️ Display | ✅ | 2560×1440, WindowServer on the firmware framebuffer. **No hardware acceleration** (yet) |
 | ⌨️🖱️ USB input | ✅ | Keyboard, mouse, trackpad (even the scroll) |
 | 💾 USB storage | ✅ | Boot disk is a USB SSD (APFS). The AMD xHCI behaves once the clocks are right |
-| 🌐 Ethernet | ✅ | Sony's proprietary "Salina" gigabit NIC, driven by our own kext (`kexts/PS5SalinaGbE`, a port of the Linux `mts` driver). DHCP, ping, ssh into the console. Polled for now, so throughput is still being tuned |
+| 🌐 Ethernet | ✅ | Sony's proprietary "Salina" gigabit NIC, driven by our own kext (`kexts/PS5SalinaGbE`, a port of the Linux `mts` driver). DHCP, ping, ssh into the console. Polled (no interrupts yet): about 25 MB/s today, from 3.5 MB/s when it first came up |
 | 📶 Wi-Fi / 🔵 BT | ❌ | NXP IW620 combo chip. No driver on this planet for macOS. USB dongles are your friends |
 | 🔊 Audio | ❌ | HDMI audio needs a real AMD framebuffer driver. USB DAC / headset works in principle |
 | 🎮 GPU acceleration | ❌ | RDNA 1 "Cyan Skillfish". There's a Metal project for the sibling BC-250 board; see [Roadmap](#-roadmap) |
@@ -136,6 +136,7 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 - [x] 8 cores / 16 threads
 - [ ] Clean shutdown / restart
 - [x] Internal Ethernet (own kext)
+- [ ] Ethernet at gigabit speed. The DMA pool is now ordinary cacheable RAM and the CPU copy is no longer the limit; the next suspect is the single thread that runs the whole receive path. The kext publishes per-stage timings in the IORegistry (`ioreg -c PS5SalinaGbE -l`) to find out
 - [ ] Audio / Bluetooth dongles
 - [ ] Cosmetics: *About This Mac* says 1 GHz and "DDR4" (the PS5 has 16 GB of **GDDR6**, we know)
 - [ ] **GPU acceleration.** The honest odds are low (~10–15 %): the PS5 has a fixed 512 MB VRAM carve-out and no PSP/SMU in the GPU's path, while the closest prior art ([MetalCyan](https://github.com/amethyst8118/MetalCyan), for the ASRock BC-250, macOS Tahoe) needs 4 GB. A port would mean moving the whole stack to Tahoe and rewriting the firmware-loading path. We're looking into it.
