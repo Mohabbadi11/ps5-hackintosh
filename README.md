@@ -25,7 +25,7 @@
 | 🖥️ Display | ✅ | 2560×1440, WindowServer on the firmware framebuffer. **No hardware acceleration** (yet) |
 | ⌨️🖱️ USB input | ✅ | Keyboard, mouse, trackpad (even the scroll) |
 | 💾 USB storage | ✅ | Boot disk is a USB SSD (APFS). The AMD xHCI behaves once the clocks are right |
-| 🌐 Ethernet | ❌ | Sony put a proprietary "Salina" NIC in there. macOS: *"what cable?"* Use a USB adapter |
+| 🌐 Ethernet | ✅ | Sony's proprietary "Salina" gigabit NIC, driven by our own kext (`kexts/PS5SalinaGbE`, a port of the Linux `mts` driver). DHCP, ping, ssh into the console. Polled for now, so throughput is still being tuned |
 | 📶 Wi-Fi / 🔵 BT | ❌ | NXP IW620 combo chip. No driver on this planet for macOS. USB dongles are your friends |
 | 🔊 Audio | ❌ | HDMI audio needs a real AMD framebuffer driver. USB DAC / headset works in principle |
 | 🎮 GPU acceleration | ❌ | RDNA 1 "Cyan Skillfish". There's a Metal project for the sibling BC-250 board; see [Roadmap](#-roadmap) |
@@ -44,7 +44,10 @@ This console has **no UART**. No serial port, no debug header, nothing. When it 
 4. **The framebuffer wants to live in a PCI BAR.** macOS' stock display driver (`IONDRVFramebuffer`) only accepts a boot framebuffer that sits inside one of the GPU's BARs. Ours sat in the middle of Sony's carve-out. So Linux (before we jump to UEFI) fills VRAM top-down until the picture lands in the first 256 MB, and our stage tells UEFI "the screen is at BAR0 + offset". WindowServer, finally: *oh, that's what you meant.*
 5. **cpus=2 deadlocked in the scheduler.** A thread was waiting for a lock it already held. Root cause: on AMD there's no Intel CPUID leaf 4, so XNU decided every logical CPU has **its own private cache**, so every logical CPU got **its own processor set**, so the scheduler ended up in a state it can't recover from. We now tell XNU what a Zen 2 cache hierarchy looks like (L1/L2 shared by 2 threads, L3 per CCX) and the problem goes away.
 6. **The interrupt that never ended.** With more than two threads the kernel died after 10–30 s, always on a different core: IPIs and TLB flushes just stopped being delivered. The stuck core had a processor priority of `0xD0` with nothing in service and the timer and IPI vectors waiting; one EOI write cleared it. Linux's hard-lockup detector keeps a hardware performance counter armed, the crash-kexec doesn't stop it, and XNU doesn't expect that interrupt. Our best explanation is that its overflow vector was left "in service" and blocked everything below it. Zeroing the PMC control registers on every core before XNU takes interrupts made 16 threads stable (9 minutes under load, no panic).
-7. **Own goal of the year.** Our debug console lived in kernel code that looked unused. `launchd` called `auditon`, jumped into our *font data*, and… yeah. It now lives in dead NFSv4 code, which this boot never runs. (Hey, a console with no network. Fits.)
+7. **The NIC that answered nobody.** The Salina functions hang off an ARI bus whose PCI config space is a *proxy*: macOS and the UEFI happily "assign" BARs there (at `0x066xxxxx`, inside RAM) and the chip never hears about it. Linux knows: it reads and writes the real config through a window in the root complex. The kext does the same, finds the real BARs, and maps them by physical address. Reads stopped coming back `0xFFFFFFFF`.
+8. **DMA that only works in the right RAM.** Next, both DMA engines failed with bus errors on the first descriptor. Linux never touches the 0x01000000-0x3fffffff range (e820 "Reserved") and neither can the southbridge, but macOS allocates its buffers exactly there. The fix is a 2 MiB pool inside RAM that Linux used, reserved in the UEFI memory map and mapped by the kext.
+9. **A kext that was silently dropped.** For a while the Ethernet kext simply did not exist as far as the kernel was concerned: OpenCore's vtable patcher refused it, because a newer SDK declares two `IONetworkController` slots as used that are still padding on Monterey. We found out by building OpenCore's own injection test tool and running it on the host. The kext is now built against a header copy that fixes the two slots.
+10. **Own goal of the year.** Our debug console lived in kernel code that looked unused. `launchd` called `auditon`, jumped into our *font data*, and… yeah. It now lives in dead NFSv4 code, which this boot never runs. (Hey, a console with no network. Fits.)
 
 > **Method:** built with AI pair-programming. Every fix above came from *measure → hypothesis → one boot → photo of the TV → repeat*. About 120 commits, zero serial cables.
 
@@ -89,6 +92,7 @@ All of these are OpenCore `Kernel > Patch` entries, built by `tools/make_baremet
 |---|---|
 | `tools/make_ierfix.py` | On every CPU: open AMD's APIC IER vectors and stop the performance counters Linux left running |
 | `tools/make_tscfix.py` | TSC 1596.3 MHz, bus = TSC/64 (the real LAPIC timer is ~25 MHz) |
+| `kexts/PS5SalinaGbE` | Ethernet: PCI 104d:9104, real BARs through the ARI proxy window, DMA pool in Linux's RAM, polled datapath. GPL-2.0 (derived from the Linux driver) |
 | `tools/make_cachefix.py` | Zen 2 cores/caches for XNU, one pset per CCX instead of per thread |
 | topology divisions | `_cpu_thread_alloc` otherwise divides by zero on AMD |
 | XCPM off, AppleRTC, MCE reporter | Intel-only power management & friends |
@@ -114,6 +118,7 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 | Path | What's in it |
 |---|---|
 | `bringup/` | The crash-kexec **stage 1** (`stub.c`), the **ktty** kernel console, the return-to-Linux path, debug tools. Has its own README |
+| `kexts/` | Our own macOS kexts (Ethernet). Built with `tools/build_kext.sh`, injected by OpenCore |
 | `uefi/` | EDK2 UefiPayloadPkg build + the HOB/bundle builder. Has its own README |
 | `opencore/` | OpenCore config and the ACPI tables (Sony's, dumped and patched) |
 | `tools/` | Build/deploy scripts: `clean_run.sh`, `ktty_run.sh`, the patch generators, the welcome screen |
@@ -130,7 +135,8 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 - [x] More than one CPU thread
 - [x] 8 cores / 16 threads
 - [ ] Clean shutdown / restart
-- [ ] USB Ethernet / audio / Bluetooth dongles
+- [x] Internal Ethernet (own kext)
+- [ ] Audio / Bluetooth dongles
 - [ ] Cosmetics: *About This Mac* says 1 GHz and "DDR4" (the PS5 has 16 GB of **GDDR6**, we know)
 - [ ] **GPU acceleration.** The honest odds are low (~10–15 %): the PS5 has a fixed 512 MB VRAM carve-out and no PSP/SMU in the GPU's path, while the closest prior art ([MetalCyan](https://github.com/amethyst8118/MetalCyan), for the ASRock BC-250, macOS Tahoe) needs 4 GB. A port would mean moving the whole stack to Tahoe and rewriting the firmware-loading path. We're looking into it.
 - [ ] Boot without the jailbreak/Linux dance — *(we're not holding our breath)*
