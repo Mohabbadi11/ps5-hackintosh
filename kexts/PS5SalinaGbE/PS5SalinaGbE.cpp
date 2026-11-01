@@ -892,6 +892,42 @@ void PS5SalinaGbE::linkCheck(bool force)
 
 // ---------------------------------------------------------------------------------------------------------------- IOEthernetController
 
+// One frame through the TX engine before the link is used: if the engine cannot fetch the descriptor/buffer (ISR bits 16/17, or the descriptor never
+// completes) the pool is in memory the southbridge cannot reach. Returns true when the frame went out.
+bool PS5SalinaGbE::dmaSelfTest()
+{
+    uint8_t *f = txScratch;
+    memset(f, 0xff, 6);                                  // broadcast
+    memcpy(f + 6, mac.bytes, 6);
+    f[12] = 0x88; f[13] = 0xb5;                          // IEEE local experimental ethertype: nothing will answer it
+    memset(f + 14, 0x5a, 46);
+    wr(GBE_REG_ISR, rd(GBE_REG_ISR));
+    IOSimpleLockLock(lock);
+    uint32_t head = txHead;
+    txRing[head].buf_addr = txScratchPa;
+    txRing[head].word2 = GBE_DESC_W2_TX;
+    txRing[head].word3 = 0;
+    BARRIER();
+    txRing[head].flags = (60 & GBE_DESC_LEN_MASK) | GBE_DESC_SOP | GBE_DESC_EOP | (head == GBE_RING_SIZE - 1 ? GBE_DESC_WRAP : 0);
+    txHead = (head + 1) % GBE_RING_SIZE;
+    setBits(GBE_REG_TX_DMA_CTRL, GBE_DMA_KICK);
+    IOSimpleLockUnlock(lock);
+    bool ok = false;
+    uint32_t isr = 0;
+    for (int i = 0; i < 20000; i++) {                    // up to 20 ms
+        IODelay(1);
+        isr = rd(GBE_REG_ISR);
+        if (isr & 0x30000) break;
+        if ((txRing[head].flags & GBE_DESC_DONE) && txRing[head].word2 < GBE_DESC_W2_ARM) { ok = true; break; }
+    }
+    LOG("DMA self-test: %s (isr %08x, desc flags %08x w2 %08x, tx cur %u)", ok ? "OK" : "FAILED", isr, txRing[head].flags, txRing[head].word2, (rd(GBE_REG_TX_RING_CUR) - txRingPa) / 16);
+    IOSimpleLockLock(lock);
+    txComplete();
+    IOSimpleLockUnlock(lock);
+    wr(GBE_REG_ISR, rd(GBE_REG_ISR));
+    return ok;
+}
+
 IOReturn PS5SalinaGbE::enable(IONetworkInterface *iface)
 {
     if (running) return kIOReturnSuccess;
@@ -899,6 +935,18 @@ IOReturn PS5SalinaGbE::enable(IONetworkInterface *iface)
     hwInit();
     rxFill();
     ringsHw();
+    if (!dmaSelfTest()) {
+        // the pool is somewhere the chip cannot reach: use the reserved pool in Linux's RAM (uncached, but known to work) and start over
+        LOG("DMA self-test failed with the %s pool, switching to the reserved pool", highMd ? "cacheable" : "current");
+        stopDma();
+        freeRings();
+        poolPreferHigh = false;
+        if (!allocRings()) { LOG("no usable DMA pool"); return kIOReturnNoMemory; }
+        hwInit();
+        rxFill();
+        ringsHw();
+        dmaSelfTest();
+    }
     dumpRegs();
     outQueue = OSDynamicCast(IOBasicOutputQueue, getOutputQueue());
     if (outQueue) { outQueue->setCapacity(512); LOG("output queue start: %d", (int)outQueue->start()); }

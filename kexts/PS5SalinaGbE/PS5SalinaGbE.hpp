@@ -186,6 +186,7 @@ private:
 
     IOBufferMemoryDescriptor *highMd = nullptr;     // cacheable pool in Linux's RAM (0x40000000-0x5fffffff), found by allocating past the low range
     bool allocHighPool();
+    bool dmaSelfTest();
     uint64_t poolHighPa = 0;
     bool poolPreferHigh = true;
     IOMemoryDescriptor *poolMd = nullptr;
