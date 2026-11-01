@@ -80,13 +80,16 @@ if os.environ.get("OC_DEBUG") == "1":
     cfg["Misc"]["Debug"]["DisplayLevel"] = 0x80400042   # error | warn | info | verbose
 # The console has no SMBIOS memory tables, so boot.efi reports PhysicalMemorySize = 0 and XNU sizes its physical-memory window
 # (physmap) at PhysicalMemorySize + 4 GiB = 4 GiB: touching RAM above that panics with "PHYSMAP_PTOV bounds exceeded".
-# Describe the PS5's 16 GB (2 x 8 GB) so the window covers all of it.
+# Describe the PS5's 16 GB (2 x 8 GB) so the window covers all of it. XNU counts mem_actual minus the pages it was given as wired, so with a
+# carve-out bigger than 512 MiB the size shrinks by the carve-out's extra GiB (never below 14 GiB: the window must still reach the RAM above the carve-out).
+_extra_carve = max(0, 0x470000000 - int(os.environ.get("CARVE_BASE", "0x450000000"), 0) - 0x20000000)
+_mem_gb = max(14, 16 - _extra_carve // 2 ** 30)
 cfg["PlatformInfo"]["CustomMemory"] = True
 cfg["PlatformInfo"]["Memory"] = {
-    "DataWidth": 64, "ErrorCorrection": 3, "FormFactor": 13, "MaxCapacity": 16 * 1024 ** 3, "TotalWidth": 64, "Type": 26,
+    "DataWidth": 64, "ErrorCorrection": 3, "FormFactor": 13, "MaxCapacity": _mem_gb * 1024 ** 3, "TotalWidth": 64, "Type": 26,
     "TypeDetail": 128,
     "Devices": [{"AssetTag": "Unknown", "BankLocator": f"BANK {i}", "DeviceLocator": f"DIMM{i}", "Manufacturer": "Unknown",
-                 "PartNumber": "Unknown", "SerialNumber": "Unknown", "Size": 8192, "Speed": 3200} for i in range(2)]}
+                 "PartNumber": "Unknown", "SerialNumber": "Unknown", "Size": _mem_gb * 512, "Speed": 3200} for i in range(2)]}
 # AMD CPUs do not report Intel-style topology (CPUID leaf 4, MSR 0x35): cores_per_package falls back to 1, cache_sharing to 1
 # while logical_per_package is 16, and initTopoParms()/x86_LLC_info() (inlined in cpu_thread_alloc, xnu cpu_threads.c) end up
 # dividing by zero. Replace each quotient by the Zen 2 value (8 cores / 16 threads, 2 CCX of 4 cores sharing an L3):
@@ -217,7 +220,7 @@ if os.environ.get("KTTY") == "1":
     # slto_us: the console paints each character through I/O ports (slow) with kernel locks held; the default 0.1 s ticket-lock
     # watchdog would panic ("Ticket spinlock ... timeout")
     cfg["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"]["boot-args"] = (
-        args if "serial=" in args else args + " serial=3") + " slto_us=10000000 msgbuf=2097152" + (" cpus=" + os.environ["CPUS"] if os.environ.get("CPUS") else "") + (" io=" + os.environ["IOLOG"] if os.environ.get("IOLOG") else "")
+        args if "serial=" in args else args + " serial=3") + " slto_us=10000000 msgbuf=2097152" + (" cpus=" + os.environ["CPUS"] if os.environ.get("CPUS") else "") + (" io=" + os.environ["IOLOG"] if os.environ.get("IOLOG") else "") + (" startup_debug=1" if os.environ.get("STARTUP_DEBUG") == "1" else "")
 plistlib.dump(cfg, open(OUT / "OC/config.plist", "wb"))
 print("EFI written to", OUT)
 for p in sorted(OUT.rglob("*")):
