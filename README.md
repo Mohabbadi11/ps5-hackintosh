@@ -63,6 +63,8 @@ This console has **no UART**. No serial port, no debug header, nothing. When it 
 
 One crash-kexec per jailbreak boot. Chain two and the console resets. So: one attempt, one photo, think, repeat.
 
+Starting from a blank console and a blank USB drive: [INSTALL.md](INSTALL.md). The short version:
+
 ```bash
 cp .env.example .env        # then put the console's Linux IP in PS5_LINUX_HOST (Mac identity is generated on first build)
 
