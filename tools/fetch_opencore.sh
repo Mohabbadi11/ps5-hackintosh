@@ -72,6 +72,14 @@ if [ -f "$DL/OpenCore-RELEASE.zip" ]; then
     echo "  [✓] OpenCore extraído"
 fi
 
+# Build DEBUG (OC_DEBUG=1: clean_run.sh and ktty_run.sh use it, it logs the memory map and the ExitBootServices steps)
+gh_latest "acidanthera/OpenCorePkg" "DEBUG.zip" "$DL/OpenCore-DEBUG.zip"
+if [ -f "$DL/OpenCore-DEBUG.zip" ]; then
+    rm -rf "$BUILD/opencore-debug" && mkdir -p "$BUILD/opencore-debug"
+    unzip -qo "$DL/OpenCore-DEBUG.zip" -d "$BUILD/opencore-debug"
+    echo "  [✓] OpenCore DEBUG extraído"
+fi
+
 # ── Kexts ──────────────────────────────────────────────
 echo ""
 echo "Kexts:"
