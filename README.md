@@ -112,7 +112,7 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 - **The display is hard-wired to 2560×1440@60**, because that is the mode my screen offers. Yours may not offer it (`kms_linear.py` stops with "no connected connector with a 2560x1440 mode"), so change it before your first boot, in three places that have to agree: `W, H` in `bringup/tools/kms_linear.py` and `tools/make_welcome.py` (the framebuffer macOS inherits), and `Resolution` in `tools/make_baremetal_efi.py` (OpenCore). The `video=` on the console's Linux command line does not matter for this: `kms_linear.py` picks the mode itself.
 - The IOMMU is off, so a misbehaving driver can DMA anywhere. Be careful with kexts for PCI devices you don't recognize.
 
-The repo ships no Apple software, no Sony firmware images (binary dumps are git-ignored; only my own ACPI *sources* are tracked) and no exploit code. Bring your own console, macOS install and jailbreak.
+The repo ships no Apple software, no Sony firmware images (binary dumps are git-ignored). The ACPI sources in `opencore/ACPI` are the exception worth knowing about: `DSDT-PS5-v2.dsl` is a disassembly of the 500-byte DSDT in the console's own firmware, patched by me, so it is Sony's table description rather than something I wrote from scratch and no exploit code. Bring your own console, macOS install and jailbreak.
 
 
 ---
