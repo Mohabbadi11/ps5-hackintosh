@@ -35,17 +35,21 @@ jobs:
           echo "--- undefined symbols (must all come from the kernel)"
           nm -u "$K/Contents/MacOS/PS5Power"
 
-      - name: Resolve PS5Power's symbols against its OSBundleLibraries
-        continue-on-error: true
-        run: |
-          K=build/kexts/PS5Power.kext
-          kmutil libraries -p "$K" --undef-symbols 2>&1 || kextlibs -undef-symbols "$K" 2>&1
-
       - name: "Build PS5SalinaGbE and PS5GpuProbe (reference, the existing kexts)"
         continue-on-error: true
         run: |
           tools/build_kext.sh
           KEXT=PS5GpuProbe tools/build_kext.sh
+
+      # Every symbol the kext needs must be exported by a library kext it declares. Checked against this runner's macOS (x86_64 slice);
+      # PS5GpuProbe, which loads on the console, declares the same libraries and is the baseline.
+      - name: Resolve symbols against the declared OSBundleLibraries (x86_64)
+        continue-on-error: true
+        run: |
+          for K in build/kexts/PS5GpuProbe.kext build/kexts/PS5Power.kext; do
+            echo "=== $K"
+            kmutil libraries -p "$K" --arch x86_64 --undef-symbols 2>&1 | tail -40
+          done
 
       - name: PS5Power against the simulated ICC mailbox (Apple clang)
         run: |
