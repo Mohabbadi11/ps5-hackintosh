@@ -15,21 +15,12 @@ CARVE_BASE=$(ssh "$PS5" cat /proc/iomem | python3 tools/carveout.py); export CAR
 echo "VRAM carve-out base $CARVE_BASE"
 [ -f opencore/ACPI/sony/APIC.bin ] || tools/dump_sony_acpi.sh      # the console's own MADT, dumped once from the running Linux
 QUIET=1 OC_DEBUG=1 python3 tools/make_baremetal_efi.py | head -1
-# Stage 1 wraps the kernel the console runs now: rebuild it on every deploy from that kernel's vmlinuz (a few seconds), so an image built
-# from an older stub.c/entry.S/link.ld/retlinux or another kernel can never go out.
-KREL=$(ssh "$PS5" uname -r)
-VMLINUZ="build/ext/vmlinuz-$KREL"
-[ -f "$VMLINUZ" ] || { echo "missing $VMLINUZ, the kernel the console runs now: scp root@<console>:/boot/vmlinuz-$KREL build/ext/ (INSTALL.md)" >&2; exit 1; }
-rm -f build/bringup/chainV5.bzImage
-bringup/build.sh "$VMLINUZ" >/dev/null
-[ -s build/bringup/chainV5.bzImage ] || { echo "bringup/build.sh did not produce build/bringup/chainV5.bzImage" >&2; exit 1; }
-ELF=build/edk2/Build/UefiPayloadPkgX64/UniversalPayload.elf
-# the bundle carries the carve-out base read above: without the ELF to rebuild it, an old bundle with an old base would be sent without a word
-[ -f "$ELF" ] || { echo "missing $ELF (uefi/build_upl.sh): cannot rebuild build/ps5-upl.bundle for carve-out base $CARVE_BASE" >&2; exit 1; }
-python3 uefi/mkbundle.py "$ELF" build/ps5-upl.bundle >/dev/null
+# stage 1 (for the kernel the console runs now) and the bundle (for the carve-out base read above), rebuilt on every deploy: tools/stage1.sh
+source tools/stage1.sh
+build_stage1
 python3 tools/make_welcome.py build/welcome.raw >/dev/null
 (cd build/baremetal-efi && tar -cf ../baremetal-efi.tar EFI)
-scp -q build/baremetal-efi.tar tools/install_efi.sh build/ps5-upl.bundle build/bringup/chainV5.bzImage bringup/tools/patch_tripwire.py bringup/tools/run_stage.sh bringup/tools/kms_linear.py build/welcome.raw $PS5:/root/
+scp -q build/baremetal-efi.tar "${STAGE1_FILES[@]}" "$PS5:/root/"
 # install_efi.sh swaps the EFI folder only after the new one is extracted and checked, keeps the old one as /boot/efi/EFI.bak and puts it back
 # if the swap fails; on any failure nothing below runs
 ssh $PS5 'bash /root/install_efi.sh /root/baremetal-efi.tar /boot/efi || exit 1

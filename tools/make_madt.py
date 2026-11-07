@@ -6,8 +6,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 IOAPIC_PAGE = 0x7fd70000
-# ACPI 6.x MADT entry sizes (type: bytes); 0 = processor local APIC, whose APIC id (+3) and flags (+4..+7) are read and written below
-MIN_LEN = {0: 8, 1: 12, 2: 10, 3: 8, 4: 6, 5: 12, 9: 16, 10: 12}
+# Minimum size of each MADT entry type defined by ACPI 6.5 (5.2.12); type 0 = processor local APIC, whose APIC id (+3) and flags
+# (+4..+7) are read and written below. 7 (local SAPIC) ends in a NUL-terminated UID string, so 16 bytes + at least the NUL.
+# 11-15 are the Arm GIC entries (GICC was 76 bytes before ACPI 6.3 and is 80/82 since, so 76 is the minimum).
+# Types 0x18-0x7F are reserved and 0x80-0xFF are OEM: their layout is unknown, so they are only stepped over by their length (at least 2).
+MIN_LEN = {0: 8, 1: 12, 2: 10, 3: 8, 4: 6, 5: 12, 6: 16, 7: 17, 8: 16, 9: 16, 10: 12,
+           11: 76, 12: 24, 13: 24, 14: 16, 15: 20, 16: 16, 17: 15, 18: 23, 19: 19, 20: 17, 21: 15, 22: 14, 23: 18}
 
 def build():
     apic = ROOT / "opencore/ACPI/sony/APIC.bin"

@@ -26,7 +26,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # ── Función para descargar release de GitHub ───────────
-# gh_latest REPO PATTERN OUT REGEX...: every REGEX must match an entry of the zip (see tools/ziputil.sh); a cached zip is checked too
+# gh_latest REPO PATTERN OUT CHECK...: every CHECK (kext:NAME or an entry regex) must pass (see tools/ziputil.sh); a cached zip is checked too
 gh_latest() {
     local repo="$1"
     local pattern="$2"
@@ -101,8 +101,8 @@ for repo in "${!KEXTS[@]}"; do
     pattern="${KEXTS[$repo]}"
     dl_file="$DL/${name}.zip"
 
-    expect=("(^|/)${name}\.kext/")
-    [ "$name" = VirtualSMC ] && expect+=("(^|/)SMCProcessor\.kext/")      # make_baremetal_efi.py copies SMCProcessor from this zip
+    expect=("kext:$name")                                                  # a complete kext: Info.plist and its executable
+    if [ "$name" = VirtualSMC ]; then expect+=("kext:SMCProcessor"); fi      # make_baremetal_efi.py copies SMCProcessor from this zip
     gh_latest "$repo" "$pattern" "$dl_file" "${expect[@]}"
 
     if [ -f "$dl_file" ]; then
@@ -118,7 +118,7 @@ done
 # SMCAMDProcessor's release holds three zips, the first being AMD.Power.Gadget.app.zip (no kext): a plain "zip" pattern took that one, so
 # neither kext was ever copied. Fetch the two kext zips by name. (The bare-metal EFI, make_baremetal_efi.py, does not load either of them.)
 for asset in SMCAMDProcessor.kext.zip AMDRyzenCPUPowerManagement.kext.zip; do
-    gh_latest "trulyspinach/SMCAMDProcessor" "$asset" "$DL/$asset" "(^|/)${asset%.zip}/"
+    gh_latest "trulyspinach/SMCAMDProcessor" "$asset" "$DL/$asset" "kext:${asset%.kext.zip}"
     KEXT_TMP=$(mktemp -d)
     unzip -qo "$DL/$asset" -d "$KEXT_TMP"
     find "$KEXT_TMP" -maxdepth 3 -name "*.kext" -exec cp -R {} "$OC_DIR/EFI/OC/Kexts/" \; 2>/dev/null

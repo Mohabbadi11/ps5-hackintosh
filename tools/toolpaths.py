@@ -16,7 +16,7 @@ def llvm_bin():
     else:
         cands = _LLVM_DEFAULTS
     for d in cands:
-        if (Path(d) / "ld.lld").exists() and (Path(d) / "llvm-objcopy").exists():
+        if all(os.access(Path(d) / t, os.X_OK) for t in ("clang", "ld.lld", "llvm-objcopy")):      # the same three tools/llvm.sh checks
             return d
     sys.exit(f"no LLVM (clang, ld.lld, llvm-objcopy) in {' or '.join(cands)}: brew install llvm@18, or set LLVM_BIN")
 
