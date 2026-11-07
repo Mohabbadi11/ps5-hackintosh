@@ -7,7 +7,7 @@ import re, sys
 
 base = None
 for line in sys.stdin:
-    m = re.match(r"^([0-9a-f]+)-([0-9a-f]+) : Reserved", line)
+    m = re.match(r"^\s*([0-9a-fA-F]+)-([0-9a-fA-F]+)\s*:\s*Reserved", line, re.IGNORECASE)
     if m and int(m.group(2), 16) == 0x46FFFFFFF:
         base = int(m.group(1), 16)
 if base is None:

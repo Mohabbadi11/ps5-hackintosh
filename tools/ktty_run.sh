@@ -14,6 +14,8 @@ VMLINUZ=$(ls build/ext/vmlinuz-* 2>/dev/null | head -1)
 if [ -n "$VMLINUZ" ] && { [ ! -f build/bringup/chainV5.bzImage ] || [ bringup/stub.c -nt build/bringup/chainV5.bzImage ]; }; then bringup/build.sh "$VMLINUZ" >/dev/null; fi
 ELF=build/edk2/Build/UefiPayloadPkgX64/UniversalPayload.elf
 [ -f "$ELF" ] && python3 uefi/mkbundle.py "$ELF" build/ps5-upl.bundle >/dev/null
+[ -f build/ps5-upl.bundle ] || { echo "ERROR: missing build/ps5-upl.bundle. Run uefi/build_upl.sh first." >&2; exit 1; }
+[ -f build/bringup/chainV5.bzImage ] || { echo "ERROR: missing build/bringup/chainV5.bzImage. See bringup/README.md." >&2; exit 1; }
 python3 tools/make_welcome.py build/welcome.raw >/dev/null
 (cd build/baremetal-efi && tar -cf ../baremetal-efi.tar EFI)
 scp -q build/baremetal-efi.tar build/ps5-upl.bundle build/bringup/chainV5.bzImage bringup/tools/patch_tripwire.py bringup/tools/run_stage.sh bringup/tools/kms_linear.py build/welcome.raw $PS5:/root/

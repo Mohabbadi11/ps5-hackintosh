@@ -31,12 +31,25 @@ rm -rf "$OVL" && mkdir -p "$OVL/IOKit/network"
 python3 - "$KH/IOKit/network/IONetworkController.h" "$OVL/IOKit/network/IONetworkController.h" <<'PY'
 import sys
 s = open(sys.argv[1]).read()
-for old, new in (("    virtual mbuf_t allocatePacketNoWait(UInt32 size);\n", ""),
-                 ("OSMetaClassDeclareReservedUsed( IONetworkController,  6);", "OSMetaClassDeclareReservedUnused( IONetworkController,  6);"),
-                 ("    virtual IOReturn setHardwareAssists( UInt32 hardwareAssists, UInt32 hardwareAssistsMask )\n", ""),
-                 ("OSMetaClassDeclareReservedUsed( IONetworkController,  7);", "OSMetaClassDeclareReservedUnused( IONetworkController,  7);")):
-    assert s.count(old) == 1, old
-    s = s.replace(old, new)
+
+already_unused = ("OSMetaClassDeclareReservedUnused( IONetworkController,  6);" in s and
+                  "OSMetaClassDeclareReservedUnused( IONetworkController,  7);" in s)
+
+if not already_unused:
+    targets = [
+        ("    virtual mbuf_t allocatePacketNoWait(UInt32 size);\n", ""),
+        ("OSMetaClassDeclareReservedUsed( IONetworkController,  6);", "OSMetaClassDeclareReservedUnused( IONetworkController,  6);"),
+        ("    virtual IOReturn setHardwareAssists( UInt32 hardwareAssists, UInt32 hardwareAssistsMask )\n", ""),
+        ("OSMetaClassDeclareReservedUsed( IONetworkController,  7);", "OSMetaClassDeclareReservedUnused( IONetworkController,  7);")
+    ]
+    missing = [old.strip() for old, _ in targets if old not in s]
+    if missing:
+        sys.exit(f"ERROR: Cannot patch IONetworkController.h for Monterey vtable compatibility.\n"
+                 f"The SDK header does not match expected patterns, and slots 6/7 are not padding.\n"
+                 f"Missing patterns: {missing}")
+    for old, new in targets:
+        s = s.replace(old, new)
+
 open(sys.argv[2], "w").write(s)
 PY
 rm -rf "$OUT" && mkdir -p "$OUT/Contents/MacOS"

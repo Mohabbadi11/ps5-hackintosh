@@ -9,11 +9,11 @@ Patch for the Monterey KC (21.6.0), as OpenCore Kernel>Patch entries (prints not
   _nfs4_getattr_rpc-sized dead NFSv4 code (STUB_SYM)                      -> stub: the numbers of a Zen 2 package, then the displaced
                                                                               instructions and a jump back
 Zen 2 as XNU wants it: 8 cores per package; L1I/L1D 32 KB and L2 512 KB shared by 2 threads (SMT), L3 4 MB per CCX shared by 8 threads."""
-import re, struct, subprocess, tempfile
+import os, re, shutil, struct, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LLVM = "/opt/homebrew/opt/llvm@18/bin"
+LLVM = os.environ.get("LLVM_BIN", "/opt/homebrew/opt/llvm@18/bin")
 KC = ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc"
 STUB_SYM = "_nfs4_getattr_rpc"
 BLOCK, BLOCK_LEN = 0x60F, 0x38           # offsets from _cpuid_wa_required: the fallback block, up to (not including) 'cmpl $0, debug flag'
@@ -25,7 +25,8 @@ CORES = 8
 
 
 def _symbols():
-    out = subprocess.run(["/usr/bin/nm", str(KC)], capture_output=True, text=True).stdout
+    nm = os.environ.get("NM_BIN") or ("/usr/bin/nm" if os.path.exists("/usr/bin/nm") else shutil.which("nm") or f"{LLVM}/llvm-nm")
+    out = subprocess.run([nm, str(KC)], capture_output=True, text=True).stdout
     return {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and re.fullmatch(r"[0-9a-f]{16}", l.split()[0])}
 
 

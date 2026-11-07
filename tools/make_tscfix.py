@@ -8,11 +8,11 @@ Patch for the Monterey KC (21.6.0), as OpenCore Kernel>Patch entries (prints not
   _nfs4_open_rpc_internal (dead NFSv4 code) -> stub: store the globals tsc_init would have computed for bus = TSC/64, ratio 64, then the
                                               displaced epilogue.
 Globals (xnu osfmk/i386/tsc.c): busFreq, tscGranularity, busFCvtt2n/n2t, tscFCvtt2n/n2t, tscFreq, bus2tsc."""
-import re, struct, subprocess, tempfile
+import os, re, shutil, struct, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LLVM = "/opt/homebrew/opt/llvm@18/bin"
+LLVM = os.environ.get("LLVM_BIN", "/opt/homebrew/opt/llvm@18/bin")
 KC = ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc"
 STUB_SYM = "_nfs4_open_rpc_internal"
 EPILOGUE = bytes.fromhex("5b415c415d415e415f5dc3")        # pop rbx, r12-r15, rbp; ret (the end of tsc_init)
@@ -23,7 +23,8 @@ M64 = (1 << 64) - 1
 
 
 def _symbols():
-    out = subprocess.run(["/usr/bin/nm", str(KC)], capture_output=True, text=True).stdout
+    nm = os.environ.get("NM_BIN") or ("/usr/bin/nm" if os.path.exists("/usr/bin/nm") else shutil.which("nm") or f"{LLVM}/llvm-nm")
+    out = subprocess.run([nm, str(KC)], capture_output=True, text=True).stdout
     return {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] in ("T", "t", "S", "D", "s", "d")}
 
 

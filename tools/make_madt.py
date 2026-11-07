@@ -17,6 +17,8 @@ def build():
     off_ids = {int(x) for x in os.environ.get("DISABLE_LAPIC", "").split(",") if x}
     while off < len(t):
         etype, elen = t[off], t[off + 1]
+        if elen == 0:
+            break
         if etype == 0 and t[off + 3] in off_ids:
             struct.pack_into("<I", t, off + 4, 0)
         off += elen
