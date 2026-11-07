@@ -4,12 +4,12 @@ From a jailbroken console and a blank USB SSD to the macOS desktop. Read it once
 install) and the last one has a budget of one attempt per jailbreak boot.
 
 I have only ever run this on my own console: a launch-model ("fat") PS5 on firmware 13.42. Some constants in the repo were measured on it (Sony's ACPI tables in `opencore/ACPI/`, the
-RSDP address in `uefi/README.md`, the carve-out layout), so a different model or firmware may need work in stage 1. The README tells you what
+RSDP address in `uefi/README.md`, the carve-out layout), so a different model or firmware is unsupported for now and would need work in stage 1. The README tells you what
 each piece does; this file tells you the order.
 
 ## What you need
 
-- A PS5 on a firmware [ps5-linux](https://github.com/ps5-linux/ps5-linux-loader) supports, and a way to jailbreak it every time you boot.
+- A launch-model ("fat") PS5 on **firmware 13.42**, and a way to jailbreak it every time you boot. That is the only combination this has been run on, and the one the [ps5-linux loader](https://github.com/ps5-linux/ps5-linux-loader) is known to work on here. Other models and firmwares are not supported for now.
 - A USB SSD for the Linux image (64 GB minimum) plus a ~70 GB macOS partition, so 256 GB in practice. Two drives work as well.
 - A USB keyboard and mouse, an HDMI screen and an Ethernet cable (the scripts reach the console over ssh).
 - A Mac to build on, with Xcode (only the kext needs it) and Homebrew:

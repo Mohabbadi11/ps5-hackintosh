@@ -13,7 +13,7 @@
                   macOS 12.7.6 on an AMD "Oberon" SoC.
 ```
 
-**Status: it boots to a stable desktop on all 16 threads, with keyboard, mouse and trackpad.** It's slow because there's no GPU acceleration yet (more on that below), and it only knows how to be a computer after a very specific ritual. Details, receipts and a lot of bit-twiddling below.
+**Status: it boots to a stable desktop on all 16 threads, with keyboard, mouse and trackpad.** Supported hardware, for now: a launch-model ("fat") PS5 on firmware 13.42, the only one I have run it on. It's slow because there's no GPU acceleration yet (more on that below), and it only knows how to be a computer after a very specific ritual. Details, receipts and a lot of bit-twiddling below.
 
 ---
 
