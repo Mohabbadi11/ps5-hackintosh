@@ -24,7 +24,9 @@ for d in nothing noclang noexec; do
 done
 
 cd "$REPO"
-mk() { env "$@" make -s --no-print-directory --eval 'pv: ; @echo $(LLVM_CONFIG)' pv; }
+# a second makefile with one target that prints the value (GNU make 3.81, the one macOS ships, has no --eval)
+printf 'pv:\n\t@echo $(LLVM_CONFIG)\n' > "$W/pv.mk"
+mk() { env "$@" make -s --no-print-directory -f Makefile -f "$W/pv.mk" pv; }
 want_default=/opt/homebrew/opt/llvm@18/bin/llvm-config                 # neither Homebrew prefix exists on this Linux: the documented default
 [ "$(mk -u LLVM_BIN -u LLVM_CONFIG)" = "$want_default" ] && ok "Makefile: no Homebrew llvm here -> $want_default" || bad "Makefile default: $(mk -u LLVM_BIN -u LLVM_CONFIG)"
 [ "$(mk -u LLVM_CONFIG LLVM_BIN=/x)" = /x/llvm-config ] && ok "Makefile: LLVM_BIN=/x -> /x/llvm-config" || bad "Makefile LLVM_BIN"

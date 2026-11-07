@@ -38,5 +38,6 @@ jobs:
           brew install llvm@18 >/dev/null
           /bin/bash -c 'source tools/llvm.sh; d=$(llvm_bin); echo "llvm.sh -> $d"; [ "$d" = /opt/homebrew/opt/llvm@18/bin ]'
           d=$(/usr/bin/python3 -I -c 'import sys; sys.path.insert(0, "tools"); import toolpaths; print(toolpaths.llvm_bin())'); echo "toolpaths.py -> $d"; [ "$d" = /opt/homebrew/opt/llvm@18/bin ]
-          m=$(env -u LLVM_BIN -u LLVM_CONFIG /usr/bin/make -s --no-print-directory --eval 'pv: ; @echo $(LLVM_CONFIG)' pv); echo "Makefile -> $m"; [ "$m" = /opt/homebrew/opt/llvm@18/bin/llvm-config ]
+          printf 'pv:\n\t@echo $(LLVM_CONFIG)\n' > /tmp/pv.mk
+          m=$(env -u LLVM_BIN -u LLVM_CONFIG /usr/bin/make -s --no-print-directory -f Makefile -f /tmp/pv.mk pv); echo "Makefile -> $m"; [ "$m" = /opt/homebrew/opt/llvm@18/bin/llvm-config ]
           /opt/homebrew/opt/llvm@18/bin/llvm-config --version
