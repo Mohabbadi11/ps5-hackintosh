@@ -114,6 +114,23 @@ Plus a fake IOAPIC, a 16-LAPIC MADT, SMBIOS `iMac20,2`, and Sony's own DSDT/FADT
 
 The repo ships no Apple software, no Sony firmware images (binary dumps are git-ignored; only my own ACPI *sources* are tracked) and no exploit code. Bring your own console, macOS install and jailbreak.
 
+
+---
+
+## Known issues
+
+**The boot disk sometimes vanishes.** The symptom, in the order you meet it: the verbose log shows `AppleUSBXHCIPCI: setPowerStateGated: going to state 2 failed with 0xe00002bc`, `interrupt while controller is unavailable` and `hardwareExceptionThreadCallGated ... attempting recovery` about 3.5 seconds into the kernel, and then the "prohibited" sign with a `support.apple.com/mac/startup` address; or you reach the desktop and a minute or two later it freezes while the screen fills with `disk1: media is not present` and `tx_enter() failed: 6`. The kernel and the network stay up, only the USB disk is gone (so `sshd` cannot start either). The disk sits on one of the console's AMD xHCI controllers (`pci1022,13ed`), not on Sony's.
+
+What I know, and how much of it I trust:
+
+- With the VRAM carve-out at 4 GiB (`vram.txt`) and my Ethernet kext watching the Salina xHCI, about half of the boots lost the disk (4 of 7 in my last tries; with the default 512 MB and the same kext it was about 3 of 10).
+- The watch was a read-only diagnostic I added to find exactly this bug. It maps a window at an address inside RAM and reads it every 100 ms for the first 15 seconds, which is when the USB disk's controller starts. It is now **off by default** (`XhciWatch=1` in the kext personality turns it on).
+- With it off, three boots in a row reached the desktop and stayed there 11 to 27 minutes without a disk error. That is encouraging, not proof: with a failure rate around one in two, three clean boots happen by chance one time in eight.
+- What I tried: handing macOS only the first 192 MB of the low RAM (the range my Ethernet kext could not DMA into) did not stop the early failure in the one boot I gave it, so I dropped it. A power-management cause looked unlikely from the log and I have not chased it.
+- I do not have the root cause. The `0x4` in the "interrupt while controller is unavailable" lines looks like the xHCI's *Host System Error* bit (a failed DMA of its own), but I have not checked that against Apple's driver.
+
+If it happens to you: power-cycle, jailbreak again and retry. I have not seen damage from it, but a disk that disappears in the middle of writes is how APFS earns its fsck, so keep a copy of the macOS partition. Keep `vram.txt` at the default 512 MB until you have a boot you trust, and leave `XhciWatch` off.
+
 ---
 
 ## Repo map

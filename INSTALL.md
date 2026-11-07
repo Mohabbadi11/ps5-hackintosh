@@ -41,7 +41,7 @@ When Linux is up on the console:
 3. Edit `/boot/efi/cmdline.txt` (the FAT partition of the USB drive) and add `crashkernel=400M`. This reserves the memory the crash
    kernel, which is my stage 1, runs from. Keep the rest of the line as the image ships it. Do not copy `usb/cmdline.txt` from this repo:
    it belongs to the QEMU phase.
-4. `/boot/efi/vram.txt` sets the size of the VRAM carve-out: `0x20000000` (512 MB) is the default, 1 GiB was tested too.
+4. `/boot/efi/vram.txt` sets the size of the VRAM carve-out: `0x20000000` (512 MB) is the default and the one to start with; 1 GiB and 4 GiB (`0x100000000`) boot to the desktop too, but see *Known issues* in the README.
    `tools/clean_run.sh` reads the resulting base address from `/proc/iomem` by itself.
 5. `python3` has to be on the console. `bringup/tools/run_stage.sh` stops `sway` of the user `ps5` so that `kms_linear.py` can take the
    display; if your image runs another compositor, stop that one instead (edit the `pkill` line).
