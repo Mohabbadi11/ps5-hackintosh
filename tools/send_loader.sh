@@ -8,16 +8,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 : "${PS5_HOST:?set PS5_HOST in .env}" "${PS5_LINUX_HOST:?set PS5_LINUX_HOST in .env}"
 ELF="${1:-$ROOT/build/bin/ps5-linux-loader.elf}"
 [ -f "$ELF" ] || { echo "no loader ELF at $ELF (make loader)"; exit 1; }
-linux_up() { nc -z -w 3 "$PS5_LINUX_HOST" 22 2>/dev/null; }
+# -G 1: give up on a connect after one second (the default waits ~75 s per attempt on an unreachable host, which made the loop miss the open port)
+linux_up() { nc -z -G 1 -w 1 "$PS5_LINUX_HOST" 22 2>/dev/null; }
 while true; do
     if linux_up; then echo "$(date +%T) Linux is up on $PS5_LINUX_HOST"; exit 0; fi
-    if nc -z -w 3 "$PS5_HOST" 9021 2>/dev/null; then
+    if nc -z -G 1 -w 1 "$PS5_HOST" 9021 2>/dev/null; then
         echo "$(date +%T) port 9021 is open on $PS5_HOST: sending $(basename "$ELF")"
         nc -w 20 "$PS5_HOST" 9021 < "$ELF"
         echo "$(date +%T) sent; the console goes to rest mode, wake it up (power button) when its light stops blinking"
         for i in $(seq 1 36); do linux_up && break; sleep 5; done        # up to 3 minutes before trying again
     else
-        echo "$(date +%T) waiting for the jailbreak (9021 closed)..."
-        sleep 5
+        [ "$((SECONDS % 30))" -lt 2 ] && echo "$(date +%T) waiting for the jailbreak (9021 closed)..."
+        sleep 0.5
     fi
 done
