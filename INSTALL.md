@@ -23,7 +23,7 @@ pip3 install pillow
 
 - A copy of macOS Monterey. The patches are matched to 12.7.6 (XNU 21.6.0), the last Monterey. Other builds are untested.
 
-Pick your display mode before building anything: the four places that have to agree are listed under *Things worth knowing* in the README.
+Pick your display mode before building anything: the three places that have to agree are listed under *Things worth knowing* in the README.
 
 ## 1. Linux on the console
 
