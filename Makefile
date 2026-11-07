@@ -103,6 +103,10 @@ deploy: loader
 	socat -t 99999999 - TCP:$(PS5_HOST):9021 < $(BUILD)/bin/ps5-linux-loader.elf
 	@echo "Sent. PS5 will enter rest mode, then boot into macOS on wake."
 
+# ── Build PS5Cyan Lilu plugin ─────────────────────────────────────
+ps5cyan:
+	bash tools/build_lilu_plugin.sh
+
 # ── Clean ──────────────────────────────────────────────────────────
 clean:
 	rm -rf $(BUILD)

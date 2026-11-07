@@ -1,4 +1,3 @@
-// The kmod_info record of a Lilu plugin; Xcode normally generates this file. The start and stop functions come from Lilu's plugin_start.cpp.
 #include <mach/mach_types.h>
 
 extern "C" {
