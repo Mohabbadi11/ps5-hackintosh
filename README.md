@@ -127,13 +127,26 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 
 What I know, and how much of it I trust:
 
-- With the VRAM carve-out at 4 GiB (`vram.txt`) and my Ethernet kext watching the Salina xHCI, about half of the boots lost the disk (4 of 7 in my last tries; with the default 512 MB and the same kext it was about 3 of 10).
-- The watch was a read-only diagnostic I added to find exactly this bug. It maps a window at an address inside RAM and reads it every 100 ms for the first 15 seconds, which is when the USB disk's controller starts. It is now **off by default** (`XhciWatch=1` in the kext personality turns it on).
-- With it off, three boots in a row reached the desktop and stayed there 11 to 27 minutes without a disk error. That is encouraging, not proof: with a failure rate around one in two, three clean boots happen by chance one time in eight.
-- What I tried: handing macOS only the first 192 MB of the low RAM (the range my Ethernet kext could not DMA into) did not stop the early failure in the one boot I gave it, so I dropped it. A power-management cause looked unlikely from the log and I have not chased it.
-- I do not have the root cause. The `0x4` in the "interrupt while controller is unavailable" lines looks like the xHCI's *Host System Error* bit (a failed DMA of its own), but I have not checked that against Apple's driver.
+- **How often.** Roughly half of the boots at a 4 GiB carve-out (`vram.txt`) lose the disk, and about 3 in 10 at the default 512 MB. Over eight boots at 4 GiB with my Ethernet kext's xHCI watch switched off, four reached the desktop and held and four lost the disk, two of them at the quiet build and two at the debug build (which draws the kernel log on screen).
+- **What it is not.** It is not that diagnostic watch (the failures went on with it off; it is now **off by default**, `XhciWatch=1` in the kext personality turns it on), not the debug console versus the quiet build, and not the GPU register probe.
+- **Leading suspect.** macOS hands out contiguous DMA buffers from the lowest free pages first, and the lowest free pages are the range `0x01000000-0x3fffffff`, which Linux marks reserved and which my Ethernet could not DMA into (it got bus errors there). I have no proof the AMD xHCI is affected: in a boot that held, its rings sat high, at `0x1f41b9000`.
+- **The experiment under way.** `kexts/PS5Bus20Watch` logs the PCI and xHCI state of the bus the disk is on (so a failure leaves evidence) and, by default, **allocates and holds every free page below 1 GiB** so nothing can be placed in that range. The first boot with it ran 16 minutes under a read/write loop without a disk error, where the failing boots had gone within two or three minutes. One boot is not proof; to try it: `KEXT=PS5Bus20Watch tools/build_kext.sh` and then `BUS20WATCH=1 tools/clean_run.sh`.
+- **Other leads, untested.** Linux leaves devices running when it crashes into stage 1 (the HDMI audio controller, the GPU's interrupt ring, its own xHCI driver on both USB controllers), and its interrupt remapping stays configured. Quiescing them in Linux right before the crash is the obvious next step.
+- **Root cause: not known.** The `0x4` in the "interrupt while controller is unavailable" lines looks like the xHCI's *Host System Error* bit (a failed DMA of its own), but I have not checked that against Apple's driver.
 
-If it happens to you: power-cycle, jailbreak again and retry. I have not seen damage from it, but a disk that disappears in the middle of writes is how APFS earns its fsck, so keep a copy of the macOS partition. Keep `vram.txt` at the default 512 MB until you have a boot you trust, and leave `XhciWatch` off.
+If it happens to you: power-cycle, jailbreak again and retry. I have not seen damage from it, but a disk that disappears in the middle of writes is how APFS earns its fsck, so keep a copy of the macOS partition. Keep `vram.txt` at the default 512 MB until you have a boot you trust. If you find the cause, I would very much like to hear it.
+
+
+---
+
+## Where I left it
+
+I am moving on to other things, so here is what is open, in the order I would pick it up. All of it is yours: fork it, break it, send it back or don't.
+
+1. **The disk that vanishes** (*Known issues*). Needs five or more clean boots in a row with `PS5Bus20Watch` before anyone trusts it; after that the pinning could move into stage 1 (leave that RAM out of the memory map) instead of a kext.
+2. **GPU acceleration.** The console's GPU arrives alive: Linux leaves it initialised, with the 4 GiB carve-out as VRAM and its microcode loaded (`kexts/PS5GpuProbe` reads a few dozen registers to show it). `kexts/PS5Cyan` is step one of a plan, a Lilu plugin that stops Apple's AMD driver from ever talking to the power controller, which belongs to Sony's firmware. Next would be a personality for PCI `1002:13fc` pointing at the Navi 10/14 accelerator classes, a way to make `HWLibs` (which only knows GC 10.1.0 to 10.1.2; this one is 10.1.3) accept it, the memory and page-table functions, and polling instead of interrupts for SDMA. Forty-three of the forty-five functions that MetalCyan hooks on the BC-250 exist by name in Monterey's `AMDRadeonX6000`. Never let anything send a message to the SMU/MP1.
+3. **Ethernet speed.** About 25 MB/s polled; per-packet copy cost dominates. Interrupts instead of polling are untried.
+4. **Install without QEMU.** Step 2 of `INSTALL.md` is the part that is not scripted end to end.
 
 ---
 

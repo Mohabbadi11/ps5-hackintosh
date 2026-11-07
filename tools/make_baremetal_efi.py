@@ -72,6 +72,11 @@ _probe = ROOT / "build/kexts/PS5GpuProbe.kext"
 if _probe.exists() and os.environ.get("GPUPROBE") == "1":
     shutil.copytree(_probe, OUT / "OC/Kexts/PS5GpuProbe.kext")
     cfg["Kernel"]["Add"].append(kext_entry("PS5GpuProbe.kext"))
+# BUS20WATCH=1 adds the read-only watcher of the GPU/xHCI PCIe bus (KEXT=PS5Bus20Watch tools/build_kext.sh)
+_watch = ROOT / "build/kexts/PS5Bus20Watch.kext"
+if _watch.exists() and os.environ.get("BUS20WATCH") == "1":
+    shutil.copytree(_watch, OUT / "OC/Kexts/PS5Bus20Watch.kext")
+    cfg["Kernel"]["Add"].append(kext_entry("PS5Bus20Watch.kext"))
 # PS5CYAN=1 adds the Lilu plugin that blocks Apple's AMD power management (tools/build_lilu_plugin.sh builds it); it must come after Lilu
 _cyan = ROOT / "build/kexts/PS5Cyan.kext"
 if _cyan.exists() and os.environ.get("PS5CYAN") == "1":
