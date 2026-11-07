@@ -7,6 +7,20 @@ I have only ever run this on my own console: a launch-model ("fat") PS5 on firmw
 RSDP address in `uefi/README.md`, the carve-out layout), so a different model or firmware is unsupported for now and would need work in stage 1. The README tells you what
 each piece does; this file tells you the order.
 
+## How long it takes
+
+Roughly, from my own runs (your Mac, network and USB disk will move these around):
+
+| Step | Time |
+|---|---|
+| Installing Monterey in QEMU (step 2) | hours on Apple Silicon (emulated), less on an Intel Mac |
+| Writing the APFS container to the USB (step 2) | about 10 minutes over gigabit |
+| UEFI payload build (step 3, once) | Docker and a clone of edk2: plan for a coffee, I did not time it |
+| One boot attempt, from Linux up to the desktop (step 4) | about 5 minutes: `clean_run.sh` takes 2 to 3, then the Apple boot another minute or two |
+| The jailbreak itself | whatever your method takes, once per attempt |
+
+Plan a free afternoon for the first time (the QEMU install is most of it), and a few minutes per attempt afterwards.
+
 ## What you need
 
 - A launch-model ("fat") PS5 on **firmware 13.42**, and a way to jailbreak it every time you boot. That is the only combination this has been run on, and the one the [ps5-linux loader](https://github.com/ps5-linux/ps5-linux-loader) is known to work on here. Other models and firmwares are not supported for now.
@@ -142,6 +156,16 @@ It builds the EFI, uploads it to `/boot/efi`, loads stage 1 as the crash kernel 
 
 3. With the USB keyboard, pick **Macintosh HD** in the picker. The Apple verbose text scrolls for a while, then WindowServer starts and
    the desktop appears. Nothing answers over the network while macOS is booting.
+
+What you should see, in order, once `clean_run.sh` prints `console is in UEFI now`:
+
+1. A welcome screen (the picture Linux left on the display). It stays for a moment.
+2. The OpenCore picker, with **Macintosh HD** in it. Pick it with the USB keyboard.
+3. White text scrolling on a black background: the Apple kernel's verbose boot. It looks like a crash and is not, give it a minute.
+4. The text stops being drawn for a while, then the screen switches to the login window or the desktop (with auto-login on, straight to the desktop).
+5. About a minute after the kernel starts, the Ethernet kext comes up (it waits 45 s on purpose) and the console answers ping and ssh.
+
+The kernel log stopping at `kdp_core zlib memory` is not necessarily a hang: ping the console before you reboot. If the "prohibited" sign appears after errors from `AppleUSBXHCIPCI`, see *Known issues* in the README.
 
 The default is `CPUS=2` with the internal SSD blocked. Once you have a desktop, power-cycle, jailbreak again and try more cores:
 
