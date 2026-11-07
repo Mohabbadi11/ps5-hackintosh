@@ -69,9 +69,9 @@ Starting from a blank console and a blank USB drive: [INSTALL.md](INSTALL.md). T
 cp .env.example .env        # then put the console's Linux IP in PS5_LINUX_HOST (Mac identity is generated on first build)
 
 # on the Mac you build on, with the console up in Linux:
-tools/clean_run.sh                       # quiet build: cpus=2, internal SSD blocked
-NVMEBLOCK=0 CPUS=1 tools/clean_run.sh    # the known-good one-CPU build
-tools/ktty_run.sh                        # debug build: kernel log drawn on the TV
+tools/clean_run.sh                       # quiet build, 2 CPUs, internal SSD blocked: the one to try first
+CPUS=16 tools/clean_run.sh               # all 16 threads, once the first one gave you a desktop (power-cycle and jailbreak again before it)
+tools/ktty_run.sh                        # debug build: kernel log drawn on the TV (CPUS=16 works here too)
 ```
 
 Then pick **Macintosh HD** in the OpenCore menu.
@@ -126,7 +126,7 @@ The repo ships no Apple software, no Sony firmware images (binary dumps are git-
 | `opencore/` | OpenCore config and the ACPI tables (Sony's, dumped and patched) |
 | `tools/` | Build/deploy scripts: `clean_run.sh`, `ktty_run.sh`, the patch generators, the welcome screen |
 | `third_party/ps5-linux-loader` | The upstream Linux loader: fetched, not vendored (`tools/fetch_binaries.sh`). Not mine; go star it |
-| `kernel/`, `initramfs/`, `tools/*qemu*`, `tools/create_macos_img.sh` | Research tooling from the QEMU phase (see below). **Not used to boot macOS anymore** |
+| `kernel/`, `initramfs/`, `tools/*qemu*`, `tools/create_macos_img.sh`, `tools/deploy.sh`, `tools/launch_hackintosh.sh`, `make deploy` | Research tooling from the QEMU phase (see below). **Not used to boot macOS anymore** |
 
 ---
 
