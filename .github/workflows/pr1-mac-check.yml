@@ -1,0 +1,42 @@
+# Mac check of the build/deploy script changes: the real Xcode kext builds, and the whole offline test suite run with the tools a stock
+# Mac has (/bin/bash 3.2, BSD tar/df/du/sed, /usr/bin/unzip, /usr/bin/python3), which is where these scripts run. Nothing talks to a console.
+name: PR1 Mac check
+
+on:
+  push:
+    branches: [ci-pr1-check]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versions
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-version
+          /bin/bash --version | head -1
+          /usr/bin/python3 --version
+          /usr/bin/make --version | head -1
+
+      - name: "Build PS5SalinaGbE (IONetworkController.h check against this SDK)"
+        run: tools/build_kext.sh 2>&1 | grep -v "was built for newer macOS version"
+
+      - name: Build PS5GpuProbe
+        run: KEXT=PS5GpuProbe tools/build_kext.sh 2>&1 | grep -v "was built for newer macOS version"
+
+      - name: "All offline tests, stock macOS tools only"
+        run: env PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash tools/ci/tests/run_all.sh "$PWD"
+
+      - name: Homebrew llvm@18 is found by tools/llvm.sh, tools/toolpaths.py and the Makefile
+        run: |
+          brew install llvm@18 >/dev/null
+          /bin/bash -c 'source tools/llvm.sh; d=$(llvm_bin); echo "llvm.sh -> $d"; [ "$d" = /opt/homebrew/opt/llvm@18/bin ]'
+          d=$(/usr/bin/python3 -I -c 'import sys; sys.path.insert(0, "tools"); import toolpaths; print(toolpaths.llvm_bin())'); echo "toolpaths.py -> $d"; [ "$d" = /opt/homebrew/opt/llvm@18/bin ]
+          m=$(env -u LLVM_BIN -u LLVM_CONFIG /usr/bin/make -s --no-print-directory --eval 'pv: ; @echo $(LLVM_CONFIG)' pv); echo "Makefile -> $m"; [ "$m" = /opt/homebrew/opt/llvm@18/bin/llvm-config ]
+          /opt/homebrew/opt/llvm@18/bin/llvm-config --version
