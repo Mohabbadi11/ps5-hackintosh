@@ -80,19 +80,11 @@ _watch = ROOT / "build/kexts/PS5Bus20Watch.kext"
 if _watch.exists() and os.environ.get("BUS20WATCH") == "1":
     shutil.copytree(_watch, OUT / "OC/Kexts/PS5Bus20Watch.kext")
     cfg["Kernel"]["Add"].append(kext_entry("PS5Bus20Watch.kext"))
-# METALCYAN=1 adds the Lilu plugin providing full Metal 3 GPU acceleration for Cyan Skillfish (Oberon 1002:13fc)
-_metalcyan = ROOT / "build/kexts/MetalCyan.kext"
-if not _metalcyan.exists() and (SRC / "OC/Kexts/MetalCyan.kext").exists():
-    _metalcyan = SRC / "OC/Kexts/MetalCyan.kext"
-if _metalcyan.exists() and os.environ.get("METALCYAN", "1") != "0":
-    shutil.copytree(_metalcyan, OUT / "OC/Kexts/MetalCyan.kext")
-    cfg["Kernel"]["Add"].append(kext_entry("MetalCyan.kext"))
-# PS5CYAN=1 adds the Lilu plugin that blocks Apple's AMD power management (tools/build_lilu_plugin.sh builds it); fallback if MetalCyan not used
-elif os.environ.get("PS5CYAN") == "1":
-    _cyan = ROOT / "build/kexts/PS5Cyan.kext"
-    if _cyan.exists():
-        shutil.copytree(_cyan, OUT / "OC/Kexts/PS5Cyan.kext")
-        cfg["Kernel"]["Add"].append(kext_entry("PS5Cyan.kext"))
+# PS5CYAN=1 adds the Lilu plugin that blocks Apple's AMD power management (tools/build_lilu_plugin.sh builds it); it must come after Lilu
+_cyan = ROOT / "build/kexts/PS5Cyan.kext"
+if _cyan.exists() and os.environ.get("PS5CYAN") == "1":
+    shutil.copytree(_cyan, OUT / "OC/Kexts/PS5Cyan.kext")
+    cfg["Kernel"]["Add"].append(kext_entry("PS5Cyan.kext"))
 # SMCProcessor lives inside the VirtualSMC release but is a separate bundle; fix its executable path when needed
 for e in cfg["Kernel"]["Add"]:
     stem = e["BundlePath"][:-5]
@@ -243,17 +235,6 @@ if os.environ.get("IERFIX", "1") != "0":
     sys.path.insert(0, str(ROOT / "tools"))
     import make_ierfix
     cfg["Kernel"]["Patch"] = make_ierfix.patches() + cfg["Kernel"]["Patch"]
-# MetalCyan boot arguments: require npci=0x3000 and safe bc250smu=0 for PS5
-if any(e.get("BundlePath") == "MetalCyan.kext" for e in cfg["Kernel"]["Add"]):
-    k = "7C436110-AB2A-4BBB-A880-FE41995C9F82"
-    b_args = cfg["NVRAM"]["Add"][k]["boot-args"].split()
-    b_args = ["npci=0x3000" if a == "npci=0x2000" else a for a in b_args]
-    if "npci=0x3000" not in b_args:
-        b_args.append("npci=0x3000")
-    if "bc250smu=0" not in b_args:
-        b_args.append("bc250smu=0")
-    cfg["NVRAM"]["Add"][k]["boot-args"] = " ".join(b_args)
-
 # QUIET=1 (no KTTY): the normal boot. -v stays (XNU's own console shows the boot text until WindowServer takes the screen), the serial probe goes.
 if os.environ.get("QUIET") == "1":
     k = "7C436110-AB2A-4BBB-A880-FE41995C9F82"
