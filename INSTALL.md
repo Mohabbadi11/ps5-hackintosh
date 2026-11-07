@@ -16,7 +16,7 @@ Roughly, from my own runs (your Mac, network and USB disk will move these around
 | Installing Monterey in QEMU (step 2) | hours on Apple Silicon (emulated), less on an Intel Mac |
 | Writing the APFS container to the USB (step 2) | about 10 minutes over gigabit |
 | UEFI payload build (step 3, once) | Docker and a clone of edk2: plan for a coffee, I did not time it |
-| One boot attempt, from Linux up to the desktop (step 4) | about 5 minutes: `clean_run.sh` takes 2 to 3, then the Apple boot another minute or two |
+| One boot attempt, from Linux up to the desktop (step 4) | a few minutes: `clean_run.sh` takes a couple, then the Apple boot another minute or two |
 | The jailbreak itself | whatever your method takes, once per attempt |
 
 Plan a free afternoon for the first time (the QEMU install is most of it), and a few minutes per attempt afterwards.
@@ -162,7 +162,7 @@ What you should see, in order, once `clean_run.sh` prints `console is in UEFI no
 1. A welcome screen (the picture Linux left on the display). It stays for a moment.
 2. The OpenCore picker, with **Macintosh HD** in it. Pick it with the USB keyboard.
 3. White text scrolling on a black background: the Apple kernel's verbose boot. It looks like a crash and is not, give it a minute.
-4. The text stops being drawn for a while, then the screen switches to the login window or the desktop (with auto-login on, straight to the desktop).
+4. WindowServer starts and the screen switches to the login window or, with auto-login on, straight to the desktop.
 5. About a minute after the kernel starts, the Ethernet kext comes up (it waits 45 s on purpose) and the console answers ping and ssh.
 
 The kernel log stopping at `kdp_core zlib memory` is not necessarily a hang: ping the console before you reboot. If the "prohibited" sign appears after errors from `AppleUSBXHCIPCI`, see *Known issues* in the README.
