@@ -3,7 +3,7 @@
 From a jailbroken console and a blank USB SSD to the macOS desktop. Read it once before you start: some steps take hours (the macOS
 install) and the last one has a budget of one attempt per jailbreak boot.
 
-I have only ever run this on my own console. Some constants in the repo were measured on it (Sony's ACPI tables in `opencore/ACPI/`, the
+I have only ever run this on my own console: a launch-model ("fat") PS5 on firmware 13.42. Some constants in the repo were measured on it (Sony's ACPI tables in `opencore/ACPI/`, the
 RSDP address in `uefi/README.md`, the carve-out layout), so a different model or firmware may need work in stage 1. The README tells you what
 each piece does; this file tells you the order.
 
@@ -155,7 +155,7 @@ If you want to watch the kernel log instead of the quiet boot, `tools/ktty_run.s
 
 You have no serial port, so the screen and the files are the instrument.
 
-- Black screen right after the jailbreak/Linux boot: the display settings, not macOS. Check the four resolution places in the README.
+- Black screen right after the jailbreak/Linux boot: the display settings, not macOS. Check the three resolution places in the README.
 - No welcome screen after `clean_run.sh`: `ssh root@<console-ip> cat /root/run_stage.log /root/kms.log` before you reboot.
 - It stops somewhere in UEFI or OpenCore: re-jailbreak, boot Linux, and read `/boot/efi/EFI/OC/opencore-*.txt` (OpenCore's debug log) **before**
   running `clean_run.sh` again, because the script replaces `/boot/efi/EFI`.
