@@ -8,7 +8,7 @@
 #
 # Uso: ./tools/create_macos_img.sh [version]
 #   Versiones: sonoma, ventura, monterey, sequoia
-#   Default: sonoma
+#   Default: monterey (the only one this project boots on the PS5: the kernel patches are matched to 12.7.6)
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD="$PROJECT_DIR/build"
 MACOS_DIR="$BUILD/macos-installer"
 
-VERSION="${1:-sonoma}"
+VERSION="${1:-monterey}"
 
 # Catalogs de Apple para cada versión
 declare -A BOARD_IDS=(
@@ -49,6 +49,11 @@ echo "  Versión: macOS $VERSION"
 echo ""
 
 mkdir -p "$MACOS_DIR"
+# The download is reused on later runs: refuse to reuse one made for another version (it would install that version without a word)
+if [ -f "$MACOS_DIR/.version" ] && [ "$(cat "$MACOS_DIR/.version")" != "$VERSION" ]; then
+    echo "Error: $MACOS_DIR holds the $(cat "$MACOS_DIR/.version") recovery, not $VERSION: delete it and $BUILD/macOS-recovery.img first"
+    exit 1
+fi
 
 # ── Descargar macrecovery si no existe ────────────────
 MACRECOVERY="$BUILD/macrecovery/macrecovery.py"
@@ -73,6 +78,7 @@ if [ ! -f "$MACOS_DIR/com.apple.recovery.boot/BaseSystem.dmg" ] && [ ! -f "$MACO
         -m "${MLB_SERIALS[$VERSION]}" \
         download
     cd "$PROJECT_DIR"
+    echo "$VERSION" > "$MACOS_DIR/.version"
     echo "  Recovery descargado"
 else
     echo "[2/4] Recovery ya descargado"
@@ -108,6 +114,8 @@ if [ ! -f "$RECOVERY_IMG" ]; then
     # Convertir DMG comprimido a imagen raw (UDRW) que QEMU pueda leer
     if command -v hdiutil &>/dev/null; then
         hdiutil convert "$DMG_FILE" -format UDRW -o "$RECOVERY_IMG" 2>&1 | tail -3
+        # hdiutil adds .dmg to an output name that does not end in it
+        if [ ! -f "$RECOVERY_IMG" ] && [ -f "$RECOVERY_IMG.dmg" ]; then mv "$RECOVERY_IMG.dmg" "$RECOVERY_IMG"; fi
     else
         qemu-img convert -f dmg -O raw "$DMG_FILE" "$RECOVERY_IMG"
     fi

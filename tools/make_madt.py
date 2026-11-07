@@ -16,7 +16,11 @@ def build():
     off = 44
     off_ids = {int(x) for x in os.environ.get("DISABLE_LAPIC", "").split(",") if x}
     while off < len(t):
+        if off + 2 > len(t):
+            sys.exit(f"APIC.bin is cut short: an entry header at {off} runs past the end ({len(t)} bytes); dump it again (tools/dump_sony_acpi.sh)")
         etype, elen = t[off], t[off + 1]
+        if elen < 2 or off + elen > len(t):
+            sys.exit(f"APIC.bin has a bad entry at {off} (type {etype}, length {elen}); dump it again (tools/dump_sony_acpi.sh)")
         if etype == 0 and t[off + 3] in off_ids:
             struct.pack_into("<I", t, off + 4, 0)
         off += elen
@@ -28,5 +32,6 @@ def build():
     return bytes(t)
 
 if __name__ == "__main__":
-    Path(sys.argv[1]).write_bytes(build())
-    print("MADT with I/O APIC:", len(build()), "bytes")
+    madt = build()
+    Path(sys.argv[1]).write_bytes(madt)
+    print("MADT with I/O APIC:", len(madt), "bytes")

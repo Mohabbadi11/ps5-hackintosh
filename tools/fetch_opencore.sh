@@ -47,7 +47,7 @@ gh_latest() {
         return 1
     fi
 
-    curl -sL -o "$out" "$url"
+    curl -fsSL -o "$out" "$url"
     echo "  [✓] $(basename "$out") ($(du -h "$out" | cut -f1))"
 }
 
@@ -91,7 +91,6 @@ declare -A KEXTS=(
     ["acidanthera/AppleALC"]="RELEASE.zip"
     ["acidanthera/NVMeFix"]="RELEASE.zip"
     ["acidanthera/RestrictEvents"]="RELEASE.zip"
-    ["trulyspinach/SMCAMDProcessor"]="zip"
 )
 
 for repo in "${!KEXTS[@]}"; do
@@ -106,12 +105,20 @@ for repo in "${!KEXTS[@]}"; do
         unzip -qo "$dl_file" -d "$KEXT_TMP"
 
         # Copiar .kext encontrados
-        find "$KEXT_TMP" -name "*.kext" -maxdepth 3 -exec cp -R {} "$OC_DIR/EFI/OC/Kexts/" \; 2>/dev/null
+        find "$KEXT_TMP" -maxdepth 3 -name "*.kext" -exec cp -R {} "$OC_DIR/EFI/OC/Kexts/" \; 2>/dev/null
         rm -rf "$KEXT_TMP"
     fi
 done
 
-# AMDRyzenCPUPowerManagement viene dentro de SMCAMDProcessor
+# SMCAMDProcessor's release holds three zips, the first being AMD.Power.Gadget.app.zip (no kext): a plain "zip" pattern took that one, so
+# neither kext was ever copied. Fetch the two kext zips by name. (The bare-metal EFI, make_baremetal_efi.py, does not load either of them.)
+for asset in SMCAMDProcessor.kext.zip AMDRyzenCPUPowerManagement.kext.zip; do
+    gh_latest "trulyspinach/SMCAMDProcessor" "$asset" "$DL/$asset"
+    KEXT_TMP=$(mktemp -d)
+    unzip -qo "$DL/$asset" -d "$KEXT_TMP"
+    find "$KEXT_TMP" -maxdepth 3 -name "*.kext" -exec cp -R {} "$OC_DIR/EFI/OC/Kexts/" \; 2>/dev/null
+    rm -rf "$KEXT_TMP"
+done
 echo ""
 
 # ── Copiar config.plist ────────────────────────────────
