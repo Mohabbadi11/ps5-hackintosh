@@ -18,11 +18,17 @@ The PS5 GPU lacks a standard PC AMD SMU (System Management Unit / MP1) interface
    - `com.apple.kext.AMDRadeonX6000Framebuffer` (`AMDRadeonX6000_AMDFramebuffer`)
    with `IOPCIMatch = 0x13fc1002` and `IOProbeScore = 65535` so `IOPCIFamily` matches and attaches the AMD driver stack.
 
-2. **PowerPlay Isolation (Stage 2)**:
+2. **PowerPlay Isolation and Hang Reset Guard (Stage 2)**:
    `PS5Cyan` intercepts the PowerPlay interface constructors:
    - `__ZN42AMDRadeonX6000_AMDRadeonHWServicesAbstract24createPowerPlayInterfaceEP18PowerPlayCallbacks`
    - `__ZN30AMDRadeonX6000_AMDRadeonHWLibs24createPowerPlayInterfaceEP18PowerPlayCallbacks`
    and routes them to `blockPowerPlay()`, which returns `0` (null) immediately. As a result, no PowerPlay object is created, and no SMU mailbox message is ever generated.
+
+   In addition, `PS5Cyan` intercepts ASIC hang-recovery routines in `AMDRadeonX6000`:
+   - `__ZN30AMDRadeonX6000_AMDAccelChannel22resetHardwareAndReplayEv`
+   - `__ZN26AMDRadeonX6000_AMDHardware13resetHardwareEjPj`
+   - `__ZN26AMDRadeonX6000_AMDHardware17dumpASICHangStateEb`
+   routing them to `blockHangReset()` (returns `0`) to prevent Apple's hang recovery from sending SMU reset messages that hang the console.
 
 3. **Boot Arguments**:
    - `-ps5cyanoff`: Disables the plugin completely.

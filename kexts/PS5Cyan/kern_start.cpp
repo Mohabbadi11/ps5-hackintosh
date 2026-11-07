@@ -22,6 +22,12 @@ static long blockPowerPlay(void *, void *)
     return 0;
 }
 
+static long blockHangReset(void *, void *)
+{
+    SYSLOG("ps5cyan", "Blocked ASIC hang reset");
+    return 0;
+}
+
 static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)
 {
     if (index == kextHWServices.loadIndex) {
@@ -34,6 +40,12 @@ static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_a
         if (!patcher.routeMultiple(index, &r, 1, address, size)) SYSLOG("ps5cyan", "HWLibs::createPowerPlayInterface was not routed (%d)", patcher.getError());
     } else if (index == kextAccel.loadIndex) {
         SYSLOG("ps5cyan", "AMDRadeonX6000 accelerator loaded for 1002:13fc");
+        KernelPatcher::RouteRequest r[] = {
+            {"__ZN30AMDRadeonX6000_AMDAccelChannel22resetHardwareAndReplayEv", blockHangReset},
+            {"__ZN26AMDRadeonX6000_AMDHardware13resetHardwareEjPj", blockHangReset},
+            {"__ZN26AMDRadeonX6000_AMDHardware17dumpASICHangStateEb", blockHangReset}
+        };
+        patcher.routeMultiple(index, r, 3, address, size);
     } else if (index == kextFB.loadIndex) {
         SYSLOG("ps5cyan", "AMDRadeonX6000Framebuffer loaded for 1002:13fc");
     }
