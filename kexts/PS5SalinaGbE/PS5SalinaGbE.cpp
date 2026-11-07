@@ -260,8 +260,13 @@ bool PS5SalinaGbE::start(IOService *provider)
     n = OSDynamicCast(OSNumber, getProperty("PollUs"));
     if (n && n->unsigned32BitValue() >= 50) pollUs = n->unsigned32BitValue();
     initTimer->setTimeoutMS(initDelayMs);
-    probeTimer = IOTimerEventSource::timerEventSource(this, (IOTimerEventSource::Action)&PS5SalinaGbE::probeTimerFired);
-    if (probeTimer && ownLoop->addEventSource(probeTimer) == kIOReturnSuccess) probeTimer->setTimeoutMS(300);       // read-only xHCI watch while the boot looks for the root disk
+    // The read-only xHCI watch (XhciWatch=1 in the personality) maps a window from the Salina xHCI's proxy BAR, which is a fake address inside RAM,
+    // and reads it every 100 ms in the first seconds, exactly when the USB disk's controller starts: it stays off unless asked for.
+    n = OSDynamicCast(OSNumber, getProperty("XhciWatch"));
+    if (n && n->unsigned32BitValue()) {
+        probeTimer = IOTimerEventSource::timerEventSource(this, (IOTimerEventSource::Action)&PS5SalinaGbE::probeTimerFired);
+        if (probeTimer && ownLoop->addEventSource(probeTimer) == kIOReturnSuccess) probeTimer->setTimeoutMS(300);
+    }
     LOG("started; hardware init in %u ms, poll every %u us", initDelayMs, pollUs);
     return true;
 }
