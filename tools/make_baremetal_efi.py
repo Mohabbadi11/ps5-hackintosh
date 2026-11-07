@@ -18,6 +18,9 @@ OUT = ROOT / "build/baremetal-efi/EFI"
 
 if not SRC.exists():
     sys.exit(f"missing {SRC}: run tools/fetch_opencore.sh first")
+_kc = ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc"
+if not _kc.exists():
+    sys.exit(f"missing {_kc}: the macOS 12.7.6 kernel collection the patches are generated from, see 'The macOS kernel collection' in INSTALL.md")
 shutil.rmtree(ROOT / "build/baremetal-efi", ignore_errors=True)
 (OUT / "BOOT").mkdir(parents=True)
 (OUT / "OC/Drivers").mkdir(parents=True)
@@ -132,7 +135,20 @@ cfg["Kernel"]["Patch"].insert(0, {
     "ReplaceMask": b"", "Skip": 0})
 # ACPI for the bare PS5 (see the VM rehearsal notes): our DSDT (PCI0 windows + an RTC node), and Sony's MADT plus a fake I/O APIC
 import make_madt
-shutil.copy(ROOT / "opencore/ACPI/DSDT-PS5-v2.aml", OUT / "OC/ACPI/DSDT.aml")
+def _compile_dsdt():
+    """Compile opencore/ACPI/DSDT-PS5-v2.dsl into build/acpi (the .aml is not tracked; it needs iasl: brew install acpica)."""
+    src, dst_dir = ROOT / "opencore/ACPI/DSDT-PS5-v2.dsl", ROOT / "build/acpi"
+    dst = dst_dir / "DSDT-PS5-v2.aml"
+    if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
+        import subprocess
+        if shutil.which("iasl") is None:
+            sys.exit("iasl not found (it compiles the ACPI sources): brew install acpica")
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(["iasl", "-p", str(dst_dir / "DSDT-PS5-v2"), "-tc", str(src)], capture_output=True, text=True)
+        if not dst.exists():
+            sys.exit("iasl failed on " + str(src) + ":\n" + r.stdout + r.stderr)
+    return dst
+shutil.copy(_compile_dsdt(), OUT / "OC/ACPI/DSDT.aml")
 (OUT / "OC/ACPI/MADT-PS5.aml").write_bytes(make_madt.build())
 cfg["ACPI"]["Add"] = [{"Comment": "PS5 DSDT", "Enabled": True, "Path": "DSDT.aml"},
                       {"Comment": "Sony MADT + fake I/O APIC", "Enabled": True, "Path": "MADT-PS5.aml"}]

@@ -8,7 +8,10 @@ ROOT = Path(__file__).resolve().parent.parent
 IOAPIC_PAGE = 0x7fd70000
 
 def build():
-    t = bytearray((ROOT / "opencore/ACPI/sony/APIC.bin").read_bytes())
+    apic = ROOT / "opencore/ACPI/sony/APIC.bin"
+    if not apic.exists():
+        sys.exit("missing opencore/ACPI/sony/APIC.bin, the console's own MADT (not tracked): with Linux up on the console run tools/dump_sony_acpi.sh")
+    t = bytearray(apic.read_bytes())
     # DISABLE_LAPIC=8,9: mark those local APIC ids as not enabled (processor local APIC entries: type 0, flags dword at +4; bit 0 = enabled)
     off = 44
     off_ids = {int(x) for x in os.environ.get("DISABLE_LAPIC", "").split(",") if x}

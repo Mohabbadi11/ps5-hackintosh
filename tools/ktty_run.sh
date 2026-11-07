@@ -8,6 +8,7 @@ source tools/lib.sh
 # and the bundle (it carries the memory map, the reserved DMA pool and the carve-out base) from the payload ELF.
 CARVE_BASE=$(ssh "$PS5" cat /proc/iomem | python3 tools/carveout.py); export CARVE_BASE
 echo "VRAM carve-out base $CARVE_BASE"
+[ -f opencore/ACPI/sony/APIC.bin ] || tools/dump_sony_acpi.sh      # the console's own MADT, dumped once from the running Linux
 OC_DEBUG=1 KTTY=1 python3 tools/make_baremetal_efi.py | head -1
 VMLINUZ=$(ls build/ext/vmlinuz-* 2>/dev/null | head -1)
 if [ -n "$VMLINUZ" ] && { [ ! -f build/bringup/chainV5.bzImage ] || [ bringup/stub.c -nt build/bringup/chainV5.bzImage ]; }; then bringup/build.sh "$VMLINUZ" >/dev/null; fi

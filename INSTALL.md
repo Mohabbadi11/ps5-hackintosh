@@ -29,11 +29,11 @@ Plan a free afternoon for the first time (the QEMU install is most of it), and a
 - A Mac to build on, with Xcode (only the kext needs it) and Homebrew:
 
 ```bash
-brew install llvm@18 docker qemu
+brew install llvm@18 docker qemu acpica
 pip3 install pillow
 ```
 
-`qemu` is only for step 2. The scripts look for LLVM in `/opt/homebrew/opt/llvm@18/bin`; set `LLVM_BIN` if yours lives elsewhere.
+`qemu` is only for step 2; `acpica` (`iasl`) compiles the ACPI sources. The scripts look for LLVM in `/opt/homebrew/opt/llvm@18/bin`; set `LLVM_BIN` if yours lives elsewhere.
 
 - A copy of macOS Monterey. The patches are matched to 12.7.6 (XNU 21.6.0), the last Monterey. Other builds are untested.
 
@@ -124,6 +124,23 @@ docker build -t ps5-edk2 uefi
 git clone --depth 1 --branch edk2-stable202505 --recurse-submodules --shallow-submodules https://github.com/tianocore/edk2.git build/edk2
 uefi/build_upl.sh -b RELEASE -l 1744830464
 ```
+
+**The macOS kernel collection**, which the patch generators (`tools/make_ierfix.py`, `make_tscfix.py`, `make_cachefix.py`, `make_ktty.py`) read to find the
+functions they patch. It is Apple's file, so it is not in the repo: take it from the macOS you installed in step 2 (the raw image is still there):
+
+```bash
+hdiutil attach build/macOS.raw                                   # mounts the volumes; note the "Macintosh HD" one
+mkdir -p build/ext/kernel
+cp "/Volumes/Macintosh HD/System/Library/KernelCollections/BootKernelExtensions.kc" build/ext/kernel/BootKernelExtensions-monterey.kc
+hdiutil detach "/Volumes/Macintosh HD"
+```
+
+If the path is not there, `find "/Volumes/Macintosh HD" -name BootKernelExtensions.kc` will say where it is. It should be about 68 MB and `file` should call it
+`Mach-O 64-bit x86_64`. The copy I develop with, from 12.7.6 (build 21H1320), has SHA-256 `df05bb028db35ea9ba87d3276c03501796a7e311e85c4d2587a575de665fe8ba`; a different hash means a different macOS build,
+and the patches are matched to that one.
+
+**Your console's MADT** (Sony's interrupt table, which I extend with a fake I/O APIC) is not in the repo either. `tools/clean_run.sh` and `tools/ktty_run.sh` dump it from the
+running Linux the first time (`tools/dump_sony_acpi.sh`, into `opencore/ACPI/sony/APIC.bin`); you can also run that script yourself.
 
 **Kernel of the console**, for stage 1. Copy the one Linux is running, so the machine comes back to the same kernel it left:
 
