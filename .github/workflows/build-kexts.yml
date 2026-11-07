@@ -44,12 +44,19 @@ jobs:
       # Every symbol the kext needs must be exported by a library kext it declares. Checked against this runner's macOS (x86_64 slice);
       # PS5GpuProbe, which loads on the console, declares the same libraries and is the baseline.
       - name: Resolve symbols against the declared OSBundleLibraries (x86_64)
-        continue-on-error: true
         run: |
+          bad=0
           for K in build/kexts/PS5GpuProbe.kext build/kexts/PS5Power.kext; do
-            echo "=== $K"
-            kmutil libraries -p "$K" --arch x86_64 --undef-symbols 2>&1 | tail -40
+            name=$(basename "$K" .kext)
+            out=$(kmutil libraries -p "$K" --arch x86_64 --undef-symbols 2>&1)
+            need=$(nm -u "$K/Contents/MacOS/$name" | wc -l | tr -d ' ')
+            got=$(grep -c ' in /System/Library/' <<<"$out" || true)
+            libs=$(grep -o 'com\.apple\.[a-zA-Z.]*' <<<"$out" | sort | uniq -c | tr '\n' ' ')
+            echo "=== $name: $need undefined symbols, $got resolved; from: $libs"
+            if grep -i -E 'not found|error' <<<"$out"; then bad=1; fi
+            [ "$got" -ge "$need" ] || { echo "$name: not every symbol resolved"; bad=1; }
           done
+          exit $bad
 
       - name: PS5Power against the simulated ICC mailbox (Apple clang)
         run: |
