@@ -30,6 +30,7 @@ Pick your display mode before building anything: the four places that have to ag
 Follow the [ps5-linux README](https://github.com/ps5-linux/ps5-linux-loader#installation) from "Get a Linux image" to "Send the payload"
 (image, flash, USB port, jailbreak, loader). It is a separate project and it explains its steps better than I would.
 Any way of sending the loader ELF to the console's payload port (9021) does the job, for example `nc <console-ip> 9021 < ps5-linux-loader.elf`.
+`tools/send_loader.sh` does it for you: leave it running in a terminal while you power-cycle and jailbreak, and it sends the loader as soon as the port opens and retries until Linux answers on ssh.
 `tools/deploy.sh` and `make deploy` do the same for the QEMU phase (they also need `socat`) and are not part of this flow.
 
 When Linux is up on the console:
