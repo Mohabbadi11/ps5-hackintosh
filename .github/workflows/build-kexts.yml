@@ -41,6 +41,17 @@ jobs:
           tools/build_kext.sh
           KEXT=PS5GpuProbe tools/build_kext.sh
 
+      - name: "Build PS5Cyan (Lilu plugin for Cyan Skillfish GPU)"
+        run: |
+          bash tools/build_lilu_plugin.sh
+          K=build/kexts/PS5Cyan.kext
+          plutil -lint "$K/Contents/Info.plist"
+          file "$K/Contents/MacOS/PS5Cyan"
+          echo "--- symbols in PS5Cyan"
+          nm "$K/Contents/MacOS/PS5Cyan" | grep -E "_kmod_info|blockPowerPlay|blockHangReset"
+          echo "--- check ___chkstk_darwin absence"
+          if nm "$K/Contents/MacOS/PS5Cyan" | grep -q "chkstk"; then echo "Error: calls chkstk" >&2; exit 1; fi
+
       # Every symbol the kext needs must be exported by a library kext it declares. Checked against this runner's macOS (x86_64 slice);
       # PS5GpuProbe, which loads on the console, declares the same libraries and is the baseline.
       - name: Resolve symbols against the declared OSBundleLibraries (x86_64)
