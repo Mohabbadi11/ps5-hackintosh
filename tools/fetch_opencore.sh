@@ -120,6 +120,18 @@ for repo in "${!KEXTS[@]}"; do
     fi
 done
 
+# ── MetalCyan (GPU acceleration for Oberon / Cyan Skillfish) ──
+gh_latest "amethyst8118/MetalCyan" "RELEASE.zip" "$DL/MetalCyan.zip"
+if [ -f "$DL/MetalCyan.zip" ]; then
+    MC_TMP=$(mktemp -d)
+    unzip -qo "$DL/MetalCyan.zip" -d "$MC_TMP"
+    mkdir -p "$BUILD/kexts"
+    find "$MC_TMP" -name "MetalCyan.kext" -maxdepth 2 -exec cp -R {} "$OC_DIR/EFI/OC/Kexts/" \; 2>/dev/null
+    find "$MC_TMP" -name "MetalCyan.kext" -maxdepth 2 -exec cp -R {} "$BUILD/kexts/" \; 2>/dev/null
+    rm -rf "$MC_TMP"
+    echo "  [✓] MetalCyan.kext extraído"
+fi
+
 # AMDRyzenCPUPowerManagement viene dentro de SMCAMDProcessor
 echo ""
 
