@@ -5,7 +5,7 @@
 # Lanza QEMU con OpenCore + recovery para instalar macOS
 # en la imagen de disco. Esto se ejecuta en tu Mac, NO en PS5.
 #
-# Uso: ./tools/install_macos_qemu.sh
+# Uso: ./tools/install_macos_qemu.sh [version]      (default monterey; the recovery made by create_macos_img.sh for that version)
 
 set -euo pipefail
 
@@ -14,7 +14,8 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD="$PROJECT_DIR/build"
 
 MACOS_IMG="$BUILD/macOS.img"
-RECOVERY_IMG="$BUILD/macOS-recovery.img"
+VERSION="${1:-monterey}"
+RECOVERY_IMG="$BUILD/macOS-recovery-$VERSION.img"
 OC_QCOW2="$BUILD/OpenCore-OSX-KVM.qcow2"
 OVMF_CODE="$BUILD/OVMF_CODE.fd"
 OVMF_VARS="$BUILD/OVMF_VARS.fd"

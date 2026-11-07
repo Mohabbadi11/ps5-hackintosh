@@ -15,9 +15,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD="$PROJECT_DIR/build"
-MACOS_DIR="$BUILD/macos-installer"
+MACOS_DIR_ROOT="$BUILD/macos-installer"
 
 VERSION="${1:-monterey}"
+# one download folder and one recovery image per version, so a later run for another version can never reuse them
+MACOS_DIR="$MACOS_DIR_ROOT/$VERSION"
+RECOVERY_IMG="$BUILD/macOS-recovery-$VERSION.img"
 
 # Catalogs de Apple para cada versión
 declare -A BOARD_IDS=(
@@ -49,11 +52,10 @@ echo "  Versión: macOS $VERSION"
 echo ""
 
 mkdir -p "$MACOS_DIR"
-# The download is reused on later runs: refuse to reuse one made for another version (it would install that version without a word)
-if [ -f "$MACOS_DIR/.version" ] && [ "$(cat "$MACOS_DIR/.version")" != "$VERSION" ]; then
-    echo "Error: $MACOS_DIR holds the $(cat "$MACOS_DIR/.version") recovery, not $VERSION: delete it and $BUILD/macOS-recovery.img first"
-    exit 1
-fi
+# Files from before the per-version names do not say which version they are: never use them, and say so
+for legacy in "$MACOS_DIR_ROOT/com.apple.recovery.boot" "$MACOS_DIR_ROOT/BaseSystem.dmg" "$BUILD/macOS-recovery.img"; do
+    if [ -e "$legacy" ]; then echo "  Aviso: $legacy es de una versión desconocida (nombre antiguo) y no se usa; bórralo cuando quieras"; fi
+done
 
 # ── Descargar macrecovery si no existe ────────────────
 MACRECOVERY="$BUILD/macrecovery/macrecovery.py"
@@ -78,7 +80,6 @@ if [ ! -f "$MACOS_DIR/com.apple.recovery.boot/BaseSystem.dmg" ] && [ ! -f "$MACO
         -m "${MLB_SERIALS[$VERSION]}" \
         download
     cd "$PROJECT_DIR"
-    echo "$VERSION" > "$MACOS_DIR/.version"
     echo "  Recovery descargado"
 else
     echo "[2/4] Recovery ya descargado"
@@ -95,7 +96,6 @@ else
 fi
 
 # ── Crear imagen del installer ────────────────────────
-RECOVERY_IMG="$BUILD/macOS-recovery.img"
 if [ ! -f "$RECOVERY_IMG" ]; then
     echo "[4/4] Creando imagen del recovery..."
     # Buscar el DMG descargado
