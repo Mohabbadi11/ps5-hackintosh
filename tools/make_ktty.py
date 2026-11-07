@@ -6,19 +6,17 @@
   _nfs4_named_attr_get  -> main + font        (33 KB of NFSv4 code a local APFS boot never runs; the audit MAC checks that this blob
                            used to overwrite are needed as soon as launchd runs auditon/setaudit_addr)
 Prints nothing; imported by make_baremetal_efi.py (KTTY=1)."""
-import os, shutil, struct, subprocess, tempfile
+import os, struct, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LLVM = os.environ.get("LLVM_BIN", "/opt/homebrew/opt/llvm@18/bin")
+LLVM = "/opt/homebrew/opt/llvm@18/bin"
 PLACEHOLDER = bytes.fromhex("0df0adde")          # 0xDEADF00D little endian
 
 
 def _symbols():
     # nm prints the kernel's symbols and then aborts on the first kext it cannot parse: keep what it printed
-    kc_path = str(ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc")
-    nm = os.environ.get("NM_BIN") or ("/usr/bin/nm" if os.path.exists("/usr/bin/nm") else shutil.which("nm") or f"{LLVM}/llvm-nm")
-    out = subprocess.run([nm, kc_path], capture_output=True, text=True).stdout
+    out = subprocess.run(["/usr/bin/nm", str(ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc")], capture_output=True, text=True).stdout
     return {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] in ("T", "t", "S", "D", "s", "d")}
 
 

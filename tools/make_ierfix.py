@@ -17,11 +17,11 @@ interrupt; the crash kexec does not stop it. On a multi-CPU boot an AP ends up w
 0xDE (IPI); an EOI clears the PPR. A perf-counter overflow (LVT vector in XNU's 0xD0 class) that never gets its EOI would look exactly like that: zeroing
 the counters made cpus=16 stable (9 minutes under load). The fix zeroes the six Zen 2 core PerfCtl MSRs (0xC0010200, +2 ... 0xC001020A) at the start of both hooks; KTTY builds also record what PerfCtl0
 held on each CPU before the fix."""
-import os, shutil, struct, subprocess, tempfile
+import os, struct, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LLVM = os.environ.get("LLVM_BIN", "/opt/homebrew/opt/llvm@18/bin")
+LLVM = "/opt/homebrew/opt/llvm@18/bin"
 KC = ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc"
 STUB_SYM = "_nfs4_parsefattr"
 LAPIC_VBASE = 0xffffff80012fc8a8           # the kernel variable holding the LAPIC's virtual base (Monterey 21.6.0)
@@ -31,8 +31,7 @@ STUB2_OFFSET = 0x200
 
 
 def _symbols():
-    nm = os.environ.get("NM_BIN") or ("/usr/bin/nm" if os.path.exists("/usr/bin/nm") else shutil.which("nm") or f"{LLVM}/llvm-nm")
-    out = subprocess.run([nm, str(KC)], capture_output=True, text=True).stdout
+    out = subprocess.run(["/usr/bin/nm", str(KC)], capture_output=True, text=True).stdout
     return {l.split()[2]: int(l.split()[0], 16) for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] in ("T", "t", "S", "D", "s", "d")}
 
 

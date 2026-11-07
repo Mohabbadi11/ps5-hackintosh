@@ -91,17 +91,8 @@ declare -A KEXTS=(
     ["acidanthera/AppleALC"]="RELEASE.zip"
     ["acidanthera/NVMeFix"]="RELEASE.zip"
     ["acidanthera/RestrictEvents"]="RELEASE.zip"
-    ["trulyspinach/SMCAMDProcessor"]="AMDRyzenCPUPowerManagement.kext.zip"
+    ["trulyspinach/SMCAMDProcessor"]="zip"
 )
-
-# Descargar también el kext principal de SMCAMDProcessor
-gh_latest "trulyspinach/SMCAMDProcessor" "SMCAMDProcessor.kext.zip" "$DL/SMCAMDProcessor-kext.zip"
-if [ -f "$DL/SMCAMDProcessor-kext.zip" ]; then
-    KEXT_TMP=$(mktemp -d)
-    unzip -qo "$DL/SMCAMDProcessor-kext.zip" -d "$KEXT_TMP"
-    find "$KEXT_TMP" -name "*.kext" -maxdepth 3 -exec cp -R {} "$OC_DIR/EFI/OC/Kexts/" \; 2>/dev/null
-    rm -rf "$KEXT_TMP"
-fi
 
 for repo in "${!KEXTS[@]}"; do
     name=$(basename "$repo")

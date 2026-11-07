@@ -17,12 +17,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD="$PROJECT_DIR/build"
 MACOS_DIR="$BUILD/macos-installer"
 
-# Default: monterey (bare-metal PS5 patches are built for macOS Monterey 12.7.6 / XNU 21.6.0)
-VERSION="${1:-monterey}"
-if [ "$VERSION" != "monterey" ]; then
-    echo "WARNING: Bare-metal PS5 kernel patches target macOS Monterey 12.7.6."
-    echo "         Version '$VERSION' is only suitable for the research QEMU VM phase."
-fi
+VERSION="${1:-sonoma}"
 
 # Catalogs de Apple para cada versión
 declare -A BOARD_IDS=(
