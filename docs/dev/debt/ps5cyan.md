@@ -35,12 +35,28 @@ Because PowerPlay/SMU queries are blocked, Apple's hardware clock queries return
 - `0xD8`: CG Reference clock = 10,000 (100 MHz in 10 kHz units)
 and resets the return value to `0` (`kIOReturnSuccess`), enabling the user-space Metal driver (`AMDRadeonX6000MTLDriver.bundle`) to instantiate the `MTLDevice`.
 
+### Stage 4: VRAM Carve-out & GVM Page Tables Translation
+On the PS5, Cyan Skillfish (`1002:13fc`) is an APU that uses unified GDDR6 memory. The loader establishes a physical memory carve-out growing downward from `0x470000000` (`base = 0x470000000 - size`).
+Apple's stock `AMDRadeonX6000` driver assumes discrete VRAM starting at physical address 0. As a result, page table entries (PTE/PDE) and HIQ process maps point to unmapped physical memory, triggering immediate hardware faults.
+
+`PS5Cyan` implements the complete GVM physical translation layer:
+- `vramPhys(address)`: Converts local VRAM offsets to physical carve-out addresses (`address + gvmFbOffset`).
+- `wrapGetPdeValue` (`__ZN26AMDRadeonX6000_AMDGFX10VMM11getPDEValueE15eAMD_VMPT_LEVELy`): Translates PDE page-table blocks to the physical carveout.
+- `wrapGetPteValue` (`__ZN26AMDRadeonX6000_AMDGFX10VMM11getPTEValueE15eAMD_VMPT_LEVELyN24AMDRadeonX6000_IAMDHWVMM10VmMapFlagsEj`): Translates VRAM PTEs (when `kPteSystem` bit 1 is clear).
+- `wrapDecodePte` (`__ZN26AMDRadeonX6000_AMDGFX10VMM9decodePTEEyPyPb`): Inverse translation for driver internal address queries.
+- `wrapUpdatePtesDma` (`__ZN29AMDRadeonX6000_AMDHWVMContext36updateContiguousPTEsWithDMAUsingAddrEyyyyy`): Translates SDMA contiguous PTE update packets.
+- `wrapFillMapProcess` (`__ZN35AMDRadeonX6000_AMDGFX10HIQHWChannel20fillMapProcessPacketEP19PM4_MES_MAP_PROCESSyyjjj`): Translates root page table addresses in HIQ `MAP_PROCESS` packets.
+- `wrapPrepareVmInvalidate` (`__ZN26AMDRadeonX6000_AMDGFX10VMM26prepareVMInvalidateRequestEP25AMD_VM_INVALIDATE_REQUESTPK22AMD_VM_INVALIDATE_INFOb`): Adjusts page table addresses in invalidate requests.
+- **Orphaned Memory Reuse Cache**: In `wrapAccelHwInfo`, bit 28 (`0x10000000`) of `IOGraphicsAccelerator2` config is cleared. This forces freed VRAM to return immediately to the system instead of getting stuck in the orphaned-memory pool, preventing VRAM leaks and out-of-memory green screens.
+
 ### Boot Arguments
 - `-ps5cyanoff`: Disables the plugin completely.
 - `-ps5cyandbg`: Enables verbose SYSLOG kernel messages.
 - `-ps5cyanbeta`: Allows loading on kernel versions outside Monterey.
+- `-ps5vram=<size_in_mb>`: Sets the VRAM carve-out size in MiB (e.g. `512`, `1024`, `4096`).
+- `-ps5vrambase=0x...`: Overrides the physical carve-out base address.
+- `-ps5vramsize=0x...`: Overrides the carve-out size in bytes.
 
 ## 3. Known Limitations & Technical Debt
 - **GC 10.1.3 Identification**: Navi 10 uses GC 10.1.0; Cyan Skillfish reports GC 10.1.3. Once claimed, `HWLibs` version check requires topology remapping.
-- **VRAM Carve-out**: Unified GDDR6 carveout (base `0x470000000 - size`) requires GVM page-table translation (Stage 4).
 - **Display Scanout**: DCN 2.0.1 pipe 5 split elimination and HDMI scanout mapping pending (Stage 5).
