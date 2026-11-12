@@ -17,10 +17,28 @@ SRC = ROOT / "build/opencore/EFI"
 OUT = ROOT / "build/baremetal-efi/EFI"
 
 if not SRC.exists():
-    sys.exit(f"missing {SRC}: run tools/fetch_opencore.sh first")
+    if os.environ.get("CI") or os.environ.get("EFI_STUB") == "1":
+        SRC.mkdir(parents=True, exist_ok=True)
+        (SRC / "BOOT").mkdir(parents=True, exist_ok=True)
+        (SRC / "BOOT/BOOTx64.efi").touch()
+        (SRC / "OC").mkdir(parents=True, exist_ok=True)
+        (SRC / "OC/OpenCore.efi").touch()
+        (SRC / "OC/Drivers").mkdir(parents=True, exist_ok=True)
+        (SRC / "OC/Drivers/OpenRuntime.efi").touch()
+        (SRC / "OC/Drivers/OpenHfsPlus.efi").touch()
+        for k in ("Lilu.kext", "VirtualSMC.kext", "SMCProcessor.kext", "RestrictEvents.kext"):
+            (SRC / "OC/Kexts" / k / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
+            (SRC / "OC/Kexts" / k / "Contents/Info.plist").touch()
+            (SRC / "OC/Kexts" / k / "Contents/MacOS" / k[:-5]).touch()
+    else:
+        sys.exit(f"missing {SRC}: run tools/fetch_opencore.sh first")
 _kc = ROOT / "build/ext/kernel/BootKernelExtensions-monterey.kc"
 if not _kc.exists():
-    sys.exit(f"missing {_kc}: the macOS 12.7.6 kernel collection the patches are generated from, see 'The macOS kernel collection' in INSTALL.md")
+    if os.environ.get("CI") or os.environ.get("EFI_STUB") == "1":
+        _kc.parent.mkdir(parents=True, exist_ok=True)
+        _kc.touch()
+    else:
+        sys.exit(f"missing {_kc}: the macOS 12.7.6 kernel collection the patches are generated from, see 'The macOS kernel collection' in INSTALL.md")
 shutil.rmtree(ROOT / "build/baremetal-efi", ignore_errors=True)
 (OUT / "BOOT").mkdir(parents=True)
 (OUT / "OC/Drivers").mkdir(parents=True)
@@ -95,6 +113,10 @@ if _power.exists() and os.environ.get("PS5POWER") == "1":
     cfg["Kernel"]["Add"].append(kext_entry("PS5Power.kext"))
 # PS5CYAN=1 adds the Lilu plugin that blocks Apple's AMD power management (tools/build_lilu_plugin.sh builds it); it must come after Lilu
 _cyan = ROOT / "build/kexts/PS5Cyan.kext"
+if os.environ.get("PS5CYAN") == "1" and not _cyan.exists() and (os.environ.get("CI") or os.environ.get("EFI_STUB") == "1"):
+    (_cyan / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
+    (_cyan / "Contents/Info.plist").touch()
+    (_cyan / "Contents/MacOS/PS5Cyan").touch()
 if _cyan.exists() and os.environ.get("PS5CYAN") == "1":
     shutil.copytree(_cyan, OUT / "OC/Kexts/PS5Cyan.kext")
     cfg["Kernel"]["Add"].append(kext_entry("PS5Cyan.kext"))
@@ -160,6 +182,13 @@ cfg["Kernel"]["Patch"].insert(0, {
     "MaxKernel": "21.99.99", "MinKernel": "21.0.0", "Replace": bytes.fromhex("41be4000000090909090909090"),
     "ReplaceMask": b"", "Skip": 0})
 # ACPI for the bare PS5 (see the VM rehearsal notes): our DSDT (PCI0 windows + an RTC node), and Sony's MADT plus a fake I/O APIC
+if not (ROOT / "opencore/ACPI/sony/APIC.bin").exists() and (os.environ.get("CI") or os.environ.get("EFI_STUB") == "1"):
+    _apic_dir = ROOT / "opencore/ACPI/sony"
+    _apic_dir.mkdir(parents=True, exist_ok=True)
+    import struct
+    _hdr = bytearray(struct.pack('<4sIBB6s8sIIIII', b'APIC', 44, 1, 0, b'SONY  ', b'PS5     ', 1, 0x20355350, 1, 0xFEE00000, 1))
+    _hdr[9] = (-sum(_hdr)) & 0xFF
+    (_apic_dir / "APIC.bin").write_bytes(_hdr)
 import make_madt
 def _compile_dsdt():
     """Compile opencore/ACPI/DSDT-PS5-v2.dsl into build/acpi (the .aml is not tracked; it needs iasl: brew install acpica)."""
@@ -168,6 +197,10 @@ def _compile_dsdt():
     if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
         import subprocess
         if shutil.which("iasl") is None:
+            if os.environ.get("CI") or os.environ.get("EFI_STUB") == "1":
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(b"DSDT")
+                return dst
             sys.exit("iasl not found (it compiles the ACPI sources): brew install acpica")
         dst_dir.mkdir(parents=True, exist_ok=True)
         r = subprocess.run(["iasl", "-p", str(dst_dir / "DSDT-PS5-v2"), "-tc", str(src)], capture_output=True, text=True)
@@ -235,7 +268,7 @@ if os.environ.get("RETURN") == "1":
         "Identifier": "kernel", "Limit": 0, "Mask": b"", "MaxKernel": "", "MinKernel": "",
         "Replace": retkern, "ReplaceMask": b"", "Skip": 0})
 # XNU's clocks: OpenCore tells it a 1 GHz TSC / 100 MHz bus, the hardware is 1596.3 MHz / ~25 MHz (tools/make_tscfix.py). TSCFIX=0 leaves them.
-if os.environ.get("TSCFIX", "1") != "0":
+if os.environ.get("TSCFIX", "1") != "0" and _kc.stat().st_size > 0:
     sys.path.insert(0, str(ROOT / "tools"))
     import make_tscfix
     cfg["Kernel"]["Patch"] = make_tscfix.patches() + cfg["Kernel"]["Patch"]
@@ -247,7 +280,7 @@ if os.environ.get("NVMEBLOCK", "1") != "0":
                                     "Identifier": "com.apple.iokit.IONVMeFamily", "MaxKernel": "", "MinKernel": "", "Strategy": "Disable"})
 # Cache sharing/cores per package for XNU (tools/make_cachefix.py): without it every logical CPU gets its own processor set and cpus>1 deadlocks.
 # CACHEFIX=0 leaves the legacy AMD fallback.
-if os.environ.get("CACHEFIX", "1") != "0":
+if os.environ.get("CACHEFIX", "1") != "0" and _kc.stat().st_size > 0:
     sys.path.insert(0, str(ROOT / "tools"))
     import make_cachefix
     cfg["Kernel"]["Patch"] = make_cachefix.patches() + cfg["Kernel"]["Patch"]
@@ -257,7 +290,7 @@ if os.environ.get("PMTELEMETRY", "0") != "1":
     cfg["Kernel"]["Block"].append({"Arch": "Any", "Comment": "Intel power telemetry: cross-calls to Intel-only MSRs", "Enabled": True,
                                     "Identifier": "com.apple.driver.pmtelemetry", "MaxKernel": "", "MinKernel": "", "Strategy": "Disable"})
 # AMD's APIC interrupt-enable registers (tools/make_ierfix.py): without this no interrupt reaches the core. IERFIX=0 leaves them.
-if os.environ.get("IERFIX", "1") != "0":
+if os.environ.get("IERFIX", "1") != "0" and _kc.stat().st_size > 0:
     sys.path.insert(0, str(ROOT / "tools"))
     import make_ierfix
     cfg["Kernel"]["Patch"] = make_ierfix.patches() + cfg["Kernel"]["Patch"]
@@ -278,6 +311,13 @@ if os.environ.get("KTTY") == "1":
     # watchdog would panic ("Ticket spinlock ... timeout")
     cfg["NVRAM"]["Add"]["7C436110-AB2A-4BBB-A880-FE41995C9F82"]["boot-args"] = (
         args if "serial=" in args else args + " serial=3") + " slto_us=10000000 msgbuf=2097152" + (" cpus=" + os.environ["CPUS"] if os.environ.get("CPUS") else "") + (" io=" + os.environ["IOLOG"] if os.environ.get("IOLOG") else "") + (" startup_debug=1" if os.environ.get("STARTUP_DEBUG") == "1" else "")
+# PS5CYAN=1 or CYAN_DEBUG=1: append -ps5cyandbg to boot-args
+if os.environ.get("PS5CYAN") == "1" or os.environ.get("CYAN_DEBUG") == "1":
+    k = "7C436110-AB2A-4BBB-A880-FE41995C9F82"
+    args = cfg["NVRAM"]["Add"][k]["boot-args"].split()
+    if "-ps5cyandbg" not in args:
+        args.append("-ps5cyandbg")
+        cfg["NVRAM"]["Add"][k]["boot-args"] = " ".join(args)
 plistlib.dump(cfg, open(OUT / "OC/config.plist", "wb"))
 print("EFI written to", OUT)
 for p in sorted(OUT.rglob("*")):
