@@ -64,22 +64,18 @@ To ensure bulletproof pairing in both bare-metal and virtualized environments, `
 
 ---
 
-## 3. DualSense Controller USB Audio (Zero-Kext Plug-and-Play Fallback)
+## 3. DualSense Controller USB Audio: Capabilities, Limitations & Reality
 
-### Hardware Interface
-The Sony DualSense wireless controller (CFI-ZCT1W) connects via USB-C or USB-A to the PS5's external USB ports, which are driven by the AMD xHCI host controllers on bus 0x20.
+### Hardware Interface & Sony macOS Specifications
+The Sony DualSense wireless controller (CFI-ZCT1W) connects via USB-C or USB-A to the PS5's external USB ports. According to Sony's official macOS compatibility documentation:
+- **Built-in Speaker & Built-in Microphone**: **NOT supported on macOS**. Apple's native driver stack does not map or expose the internal speaker or internal beamforming microphone array.
+- **3.5mm Headphone Jack**: Supported for 2-channel 48 kHz stereo audio output **strictly over a wired USB connection**. Connecting the controller wirelessly via Bluetooth does not support audio output or input on macOS.
+- **Microphone via TRRS Jack**: Headset microphones connected to the 3.5mm jack have inconsistent vendor support under stock `AppleUSBAudio` and are considered unverified on this platform.
 
-### USB Audio Class Specification
-The DualSense controller implements standard USB Audio Class (UAC) 1.0/2.0 descriptors:
-- **Audio Output**: 2-channel 48 kHz, 16-bit PCM stereo output routed to the 3.5mm TRRS headphone jack on the base of the controller as well as the integrated controller speaker.
-- **Audio Input**: Integrated beamforming microphone array and TRRS headset microphone input.
-
-### Zero-Kext Integration
-Because the DualSense strictly complies with standard USB Audio Class specifications:
-- macOS attaches its native driver, `com.apple.driver.AppleUSBAudio` (`/System/Library/Extensions/AppleUSBAudio.kext`), immediately upon USB enumeration.
-- No AppleALC layout-id configuration, Lilu plugins, DSDT edits, or kernel patches are required.
-- The controller appears in **System Settings > Sound** as `"Wireless Controller"` with full volume control, mute button support, and input/output routing.
-- This serves as an immediate, latency-free hardware audio fallback for any user who connects the controller via USB cable.
+### Zero-Kext Integration Profile (Wired Headphone Jack Only)
+- Under a wired USB connection, macOS attaches `com.apple.driver.AppleUSBAudio` to the controller's USB Audio Class interface.
+- Output through the 3.5mm headphone jack operates as a basic stereo endpoint in **System Settings > Sound**.
+- **Current Status**: While compliant with standard UAC on generic Mac hardware, audio output through the DualSense on the PS5's specific xHCI / bus 0x20 topology has not yet been physically verified and remains a bare-metal hardware testing milestone.
 
 ---
 

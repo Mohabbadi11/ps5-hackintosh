@@ -34,35 +34,38 @@ static long blockHangReset(void *, void *)
     return 0;
 }
 
-static bool publishedHdaGfx = false;
+static bool publishedGpu = false;
+static bool publishedAudio = false;
 
 static void publishHdaGfx()
 {
-    if (publishedHdaGfx) return;
+    if (publishedGpu && publishedAudio) return;
     OSDictionary *matching = IOService::serviceMatching("IOPCIDevice");
     if (matching == nullptr) return;
     OSIterator *iter = IOService::getMatchingServices(matching);
+    matching->release();
     if (iter == nullptr) return;
-    publishedHdaGfx = true;
     while (auto *obj = iter->getNextObject()) {
         auto *entry = OSDynamicCast(IORegistryEntry, obj);
         if (entry == nullptr) continue;
         auto *vendor = OSDynamicCast(OSData, entry->getProperty("vendor-id"));
         auto *device = OSDynamicCast(OSData, entry->getProperty("device-id"));
-        if (vendor != nullptr && device != nullptr && vendor->getLength() >= 2 && device->getLength() >= 2) {
+        if (!publishedGpu && vendor != nullptr && device != nullptr && vendor->getLength() >= 2 && device->getLength() >= 2) {
             uint16_t vid = *reinterpret_cast<const uint16_t *>(vendor->getBytesNoCopy());
             uint16_t did = *reinterpret_cast<const uint16_t *>(device->getBytesNoCopy());
             if (vid == 0x1002 && did == 0x13fc) {
                 entry->setProperty("hda-gfx", "onboard-1");
+                publishedGpu = true;
                 SYSLOG("ps5cyan", "Published hda-gfx on provider PCI device (1002:13fc)");
             }
         }
         auto *classCode = OSDynamicCast(OSData, entry->getProperty("class-code"));
-        if (vendor != nullptr && classCode != nullptr && vendor->getLength() >= 2 && classCode->getLength() >= 3) {
+        if (!publishedAudio && vendor != nullptr && classCode != nullptr && vendor->getLength() >= 2 && classCode->getLength() >= 3) {
             uint16_t vid = *reinterpret_cast<const uint16_t *>(vendor->getBytesNoCopy());
             const uint8_t *cc = reinterpret_cast<const uint8_t *>(classCode->getBytesNoCopy());
             if (vid == 0x1002 && cc[1] == 0x03 && cc[2] == 0x04) {
                 entry->setProperty("hda-gfx", "onboard-1");
+                publishedAudio = true;
                 SYSLOG("ps5cyan", "Published hda-gfx on audio PCI device");
             }
         }
@@ -357,8 +360,10 @@ static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_a
         };
         for (auto &req : r) {
             if (!patcher.routeMultiple(index, &req, 1, address, size)) {
-                SYSLOG("ps5cyan", "Failed to route %s (%d)", req.symbol, patcher.getError());
+                SYSLOG("ps5cyan", "Failed to route framebuffer hook %s (%d)", req.symbol, patcher.getError());
                 patcher.clearError();
+            } else {
+                SYSLOG("ps5cyan", "Successfully routed framebuffer hook %s", req.symbol);
             }
         }
         const mach_vm_address_t fn = findFunctionByString(address, size, kApplyPipeSplitFlags, sizeof(kApplyPipeSplitFlags));
