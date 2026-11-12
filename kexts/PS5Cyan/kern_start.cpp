@@ -54,9 +54,12 @@ static void publishHdaGfx()
             uint16_t vid = *reinterpret_cast<const uint16_t *>(vendor->getBytesNoCopy());
             uint16_t did = *reinterpret_cast<const uint16_t *>(device->getBytesNoCopy());
             if (vid == 0x1002 && did == 0x13fc) {
-                entry->setProperty("hda-gfx", "onboard-1");
-                publishedGpu = true;
-                SYSLOG("ps5cyan", "Published hda-gfx on provider PCI device (1002:13fc)");
+                if (entry->setProperty("hda-gfx", "onboard-1")) {
+                    publishedGpu = true;
+                    SYSLOG("ps5cyan", "Published hda-gfx on provider PCI device (1002:13fc)");
+                } else {
+                    SYSLOG("ps5cyan", "Failed to publish hda-gfx on provider PCI device (1002:13fc)");
+                }
             }
         }
         auto *classCode = OSDynamicCast(OSData, entry->getProperty("class-code"));
@@ -64,9 +67,12 @@ static void publishHdaGfx()
             uint16_t vid = *reinterpret_cast<const uint16_t *>(vendor->getBytesNoCopy());
             const uint8_t *cc = reinterpret_cast<const uint8_t *>(classCode->getBytesNoCopy());
             if (vid == 0x1002 && cc[1] == 0x03 && cc[2] == 0x04) {
-                entry->setProperty("hda-gfx", "onboard-1");
-                publishedAudio = true;
-                SYSLOG("ps5cyan", "Published hda-gfx on audio PCI device");
+                if (entry->setProperty("hda-gfx", "onboard-1")) {
+                    publishedAudio = true;
+                    SYSLOG("ps5cyan", "Published hda-gfx on audio PCI device");
+                } else {
+                    SYSLOG("ps5cyan", "Failed to publish hda-gfx on audio PCI device");
+                }
             }
         }
     }

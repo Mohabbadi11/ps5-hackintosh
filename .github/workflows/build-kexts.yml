@@ -1,0 +1,89 @@
+# Compile check on GitHub's macOS runners: builds the kexts with Xcode's macOS SDK and checks they link against the kernel libraries
+# they declare. It cannot load or run them (that needs the console).
+name: Build kexts (compile check)
+
+on:
+  push:
+    branches: [ci-build-check]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode and SDK
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-path
+          xcrun --show-sdk-version
+
+      - name: Build PS5Power
+        run: KEXT=PS5Power tools/build_kext.sh
+
+      - name: Inspect PS5Power
+        run: |
+          K=build/kexts/PS5Power.kext
+          plutil -lint "$K/Contents/Info.plist"
+          file "$K/Contents/MacOS/PS5Power"
+          echo "--- class symbols"
+          nm "$K/Contents/MacOS/PS5Power" | grep -E "8PS5Power|_kmod_info" | head -40
+          echo "--- undefined symbols (must all come from the kernel)"
+          nm -u "$K/Contents/MacOS/PS5Power"
+
+      - name: "Build PS5SalinaGbE and PS5GpuProbe (reference, the existing kexts)"
+        continue-on-error: true
+        run: |
+          tools/build_kext.sh
+          KEXT=PS5GpuProbe tools/build_kext.sh
+
+      - name: "Build PS5Cyan (Lilu plugin for Cyan Skillfish GPU)"
+        run: |
+          bash tools/build_lilu_plugin.sh
+          K=build/kexts/PS5Cyan.kext
+          plutil -lint "$K/Contents/Info.plist"
+          file "$K/Contents/MacOS/PS5Cyan"
+          echo "--- symbols in PS5Cyan"
+          nm "$K/Contents/MacOS/PS5Cyan" | grep -E "_kmod_info|blockPowerPlay|blockHangReset"
+          echo "--- check ___chkstk_darwin absence"
+          if nm "$K/Contents/MacOS/PS5Cyan" | grep -q "chkstk"; then echo "Error: calls chkstk" >&2; exit 1; fi
+
+      # Every symbol the kext needs must be exported by a library kext it declares. Checked against this runner's macOS (x86_64 slice);
+      # PS5GpuProbe, which loads on the console, declares the same libraries and is the baseline.
+      - name: Resolve symbols against the declared OSBundleLibraries (x86_64)
+        run: |
+          bad=0
+          for K in build/kexts/PS5GpuProbe.kext build/kexts/PS5Power.kext; do
+            name=$(basename "$K" .kext)
+            out=$(kmutil libraries -p "$K" --arch x86_64 --undef-symbols 2>&1)
+            need=$(nm -u "$K/Contents/MacOS/$name" | wc -l | tr -d ' ')
+            got=$(grep -c ' in /System/Library/' <<<"$out" || true)
+            libs=$(grep -o 'com\.apple\.[a-zA-Z.]*' <<<"$out" | sort | uniq -c | tr '\n' ' ')
+            echo "=== $name: $need undefined symbols, $got resolved; from: $libs"
+            if grep -i -E 'not found|error' <<<"$out"; then bad=1; fi
+            [ "$got" -ge "$need" ] || { echo "$name: not every symbol resolved"; bad=1; }
+          done
+          exit $bad
+
+      - name: PS5Power against the simulated ICC mailbox (Apple clang)
+        run: |
+          # the kext is x86_64 (inline mfence): build the test for x86_64 too; on an Apple Silicon runner it runs under Rosetta
+          clang++ -arch x86_64 -std=c++17 -Wall -Wextra -Wno-unused-parameter -I tools/ci/kstub -o /tmp/ps5power_test tools/ci/test_ps5power.cpp
+          file /tmp/ps5power_test
+          /tmp/ps5power_test
+
+      - name: "Test building full OpenCore EFI with PS5CYAN=1"
+        run: |
+          PS5CYAN=1 python3 tools/make_baremetal_efi.py
+          test -f build/baremetal-efi/EFI/OC/config.plist
+          grep -q "PS5Cyan.kext" build/baremetal-efi/EFI/OC/config.plist
+          grep -q -- "-ps5cyandbg" build/baremetal-efi/EFI/OC/config.plist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kexts
+          path: build/kexts/*.kext

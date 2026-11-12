@@ -69,7 +69,7 @@ To ensure bulletproof pairing in both bare-metal and virtualized environments, `
 ### Hardware Interface & Sony macOS Specifications
 The Sony DualSense wireless controller (CFI-ZCT1W) connects via USB-C or USB-A to the PS5's external USB ports. According to Sony's official macOS compatibility documentation:
 - **Built-in Speaker & Built-in Microphone**: **NOT supported on macOS**. Apple's native driver stack does not map or expose the internal speaker or internal beamforming microphone array.
-- **3.5mm Headphone Jack**: Supported for 2-channel 48 kHz stereo audio output **strictly over a wired USB connection**. Connecting the controller wirelessly via Bluetooth does not support audio output or input on macOS.
+- **3.5mm Headphone Jack**: Supported for 2-channel stereo audio output **strictly over a wired USB connection**. Connecting the controller wirelessly via Bluetooth does not support audio output or input on macOS.
 - **Microphone via TRRS Jack**: Headset microphones connected to the 3.5mm jack have inconsistent vendor support under stock `AppleUSBAudio` and are considered unverified on this platform.
 
 ### Zero-Kext Integration Profile (Wired Headphone Jack Only)
@@ -79,19 +79,18 @@ The Sony DualSense wireless controller (CFI-ZCT1W) connects via USB-C or USB-A t
 
 ---
 
-## 4. BlackHole Virtual Audio Loopback (Preventing CoreAudio Stalls)
+## 4. BlackHole Virtual Audio Loopback (Software Loopback Mechanism)
 
-### CoreAudio Master Clock Requirement
-In macOS, the CoreAudio daemon (`coreaudiod`) and the media playback framework (`AVFoundation` / `VideoToolbox` / `WebKit`) enforce synchronous playback timing against an active audio device clock (the master hardware timebase):
-- In systems where no audio output device is present or active, CoreAudio cannot derive a hardware sample clock (`AudioHardwareDevice` timebase sync).
-- When a web browser (Safari, Chrome) or media application attempts HTML5 `<video>` or `<audio>` playback (e.g. YouTube, Vimeo, local QuickTime movies), playback threads block indefinitely waiting for audio sample clock ticks.
-- This results in video buffers freezing on the first frame, spinning loading indicators, and potential `WindowServer` hangs or thread deadlocks.
+### CoreAudio Master Clock and Software Loopback
+In macOS, the CoreAudio daemon (`coreaudiod`) and media frameworks (`AVFoundation` / `VideoToolbox` / `WebKit`) synchronize playback timing against an active audio device clock:
+- In environments where physical audio output is inactive or unconfigured, media playback threads (such as web browser video or HTML5 players) may pause while awaiting sample clock ticks from an active audio engine.
+- Rather than leaving the system without an active audio timebase, a software loopback mechanism can supply a steady reference clock to keep playback progressing smoothly.
 
 ### BlackHole Architecture
-To prevent playback stalls in headless environments or when neither HDMI Audio nor USB Audio is connected:
-- **BlackHole** (`BlackHole2ch` / `BlackHole16ch`) is installed as a user-space CoreAudio HAL plug-in in `/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver`.
-- It registers an in-kernel/user-space virtual audio loopback engine that generates a steady, continuous 44.1 kHz / 48 kHz clock timebase with zero latency and zero CPU overhead.
-- When configured as the default system output, CoreAudio threads advance seamlessly, allowing web browsers and media frameworks to decode and play video at full framerate without stalling.
+To provide an active audio device clock when physical outputs are unavailable:
+- **BlackHole** (`BlackHole2ch` / `BlackHole16ch`) operates entirely as a user-space CoreAudio HAL plug-in in `/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver`, requiring zero kernel extensions.
+- As a pure user-space audio driver conforming to Apple's Audio Server Plug-in API, it implements a software loopback mechanism that generates continuous clock timing with zero latency and negligible CPU usage.
+- When selected as the default system output, CoreAudio threads advance consistently, allowing browsers and media frameworks to play content without relying on physical HDMI or USB endpoints.
 
 ---
 
