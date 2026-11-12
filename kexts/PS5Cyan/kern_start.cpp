@@ -56,10 +56,138 @@ static uint32_t wrapAccelHwInfo(void *device, uint8_t *out)
 static constexpr uint64_t kPteSystem = 1ULL << 1;
 static constexpr uint64_t kPteAddrMask = 0x0000FFFFFFFFF000ULL;
 static constexpr uint64_t kPdeAddrMask = 0x0000FFFFFFFFFFC0ULL;
+static constexpr uint64_t kDefaultFbBase = 0xF400000000ULL;
+static constexpr size_t kPlaneScanBytes = 0x200;
+static constexpr size_t kCursorScanBytes = 0x80;
+static constexpr size_t kMaxSaved = 8;
+static constexpr size_t kMaxPipes = 6;
+static const char kApplyPipeSplitFlags[] = "int dcn20_validate_apply_pipe_split_flags(struct dc *, struct dc_state *, int, int *, _Bool *)";
 
 static uint64_t gvmFbOffset = 0x450000000ULL;
 static uint64_t gvmFbSize = 0x20000000ULL;
-static uint64_t gvmFbBase = 0;
+static uint64_t gvmFbBase = kDefaultFbBase;
+
+static bool toUMA(uint64_t &addr)
+{
+    const uint64_t base = gvmFbBase != 0 ? gvmFbBase : kDefaultFbBase;
+    const uint64_t top = base + gvmFbSize;
+    if (addr < base || addr >= top) return false;
+    addr = addr - base + gvmFbOffset;
+    return true;
+}
+
+static size_t translateWindow(void *base, size_t length, uint64_t *saved, size_t *savedOff, size_t maxSaved)
+{
+    if (base == nullptr) return 0;
+    size_t count = 0;
+    auto *words = static_cast<uint64_t *>(base);
+    for (size_t i = 0; i < length / sizeof(uint64_t); i++) {
+        uint64_t value = words[i];
+        if (!toUMA(value)) continue;
+        if (saved != nullptr && savedOff != nullptr) {
+            if (count >= maxSaved) break;
+            saved[count] = words[i];
+            savedOff[count] = i;
+        }
+        words[i] = value;
+        count++;
+    }
+    return count;
+}
+
+static void restoreWindow(void *base, const uint64_t *saved, const size_t *savedOff, size_t count)
+{
+    if (base == nullptr || saved == nullptr || savedOff == nullptr) return;
+    auto *words = static_cast<uint64_t *>(base);
+    for (size_t i = 0; i < count; i++) {
+        words[savedOff[i]] = saved[i];
+    }
+}
+
+static mach_vm_address_t orgPrepareSurface = 0;
+
+static uint64_t wrapPrepareSurface(void *self, const void *displayPath, void *plane)
+{
+    const uint64_t ret = FunctionCast(wrapPrepareSurface, orgPrepareSurface)(self, displayPath, plane);
+    translateWindow(plane, kPlaneScanBytes, nullptr, nullptr, 0);
+    return ret;
+}
+
+static mach_vm_address_t orgUpdateSurfaceInfo = 0;
+
+static uint64_t wrapUpdateSurfaceInfo(void *self, const void *plane, const void *displayPath)
+{
+    uint64_t saved[kMaxSaved];
+    size_t off[kMaxSaved];
+    auto *mutablePlane = const_cast<void *>(plane);
+    const size_t n = translateWindow(mutablePlane, kPlaneScanBytes, saved, off, kMaxSaved);
+    const uint64_t ret = FunctionCast(wrapUpdateSurfaceInfo, orgUpdateSurfaceInfo)(self, plane, displayPath);
+    restoreWindow(mutablePlane, saved, off, n);
+    return ret;
+}
+
+static mach_vm_address_t orgSetCursorImage = 0;
+
+static uint64_t wrapSetCursorImage(void *self, const void *cursor)
+{
+    uint64_t saved[kMaxSaved];
+    size_t off[kMaxSaved];
+    auto *mutableCursor = const_cast<void *>(cursor);
+    const size_t n = translateWindow(mutableCursor, kCursorScanBytes, saved, off, kMaxSaved);
+    const uint64_t ret = FunctionCast(wrapSetCursorImage, orgSetCursorImage)(self, cursor);
+    restoreWindow(mutableCursor, saved, off, n);
+    return ret;
+}
+
+static mach_vm_address_t orgApplyPipeSplitFlags = 0;
+
+static int wrapApplyPipeSplitFlags(void *dc, void *context, int vlevel, int *split, bool *merge)
+{
+    const int ret = FunctionCast(wrapApplyPipeSplitFlags, orgApplyPipeSplitFlags)(dc, context, vlevel, split, merge);
+    if (split != nullptr) {
+        for (size_t i = 0; i < kMaxPipes; i++) {
+            if (split[i] != 0) split[i] = 0;
+        }
+    }
+    return ret;
+}
+
+static mach_vm_address_t findFunctionByString(mach_vm_address_t start, size_t size, const char *str, size_t len)
+{
+    size_t strOff = 0;
+    if (!KernelPatcher::findPattern(str, nullptr, len, reinterpret_cast<const void *>(start), size, &strOff)) {
+        return 0;
+    }
+    const mach_vm_address_t strAddr = start + strOff;
+    const uint8_t *p = reinterpret_cast<const uint8_t *>(start);
+
+    mach_vm_address_t found = 0;
+    for (size_t i = 0; i + 7 <= size; i++) {
+        if ((p[i] != 0x48 && p[i] != 0x4C) || p[i + 1] != 0x8D || (p[i + 2] & 0xC7) != 0x05) {
+            continue;
+        }
+        int32_t disp;
+        __builtin_memcpy(&disp, p + i + 3, sizeof(disp));
+        if (static_cast<mach_vm_address_t>(static_cast<int64_t>(start + i + 7) + disp) != strAddr) {
+            continue;
+        }
+        mach_vm_address_t fn = 0;
+        for (size_t j = i; j >= 4 && i - j < 0x8000; j--) {
+            if (p[j] == 0x55 && p[j + 1] == 0x48 && p[j + 2] == 0x89 && p[j + 3] == 0xE5) {
+                const uint8_t prev = p[j - 1];
+                if ((j % 16) == 0 || prev == 0xC3 || prev == 0xCC || prev == 0x90 || prev == 0x00) {
+                    fn = start + j;
+                    break;
+                }
+            }
+        }
+        if (fn == 0 || (found != 0 && found != fn)) {
+            return 0;
+        }
+        found = fn;
+    }
+    return found;
+}
 
 static uint64_t vramPhys(uint64_t address)
 {
@@ -168,6 +296,26 @@ static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_a
         patcher.routeMultiple(index, r, 10, address, size);
     } else if (index == kextFB.loadIndex) {
         SYSLOG("ps5cyan", "AMDRadeonX6000Framebuffer loaded for 1002:13fc");
+        KernelPatcher::RouteRequest r[] = {
+            {"__ZN27AMDRadeonX6000_AmdDalHelper34prepareDalDisplaySurfaceParametersEPK16AmdFbDisplayPathP20AmdFalconUpdatePlane", wrapPrepareSurface, orgPrepareSurface},
+            {"__ZN27AMDRadeonX6000_AmdDalHelper17updateSurfaceInfoEPK20AmdFalconUpdatePlanePK16AmdFbDisplayPath", wrapUpdateSurfaceInfo, orgUpdateSurfaceInfo},
+            {"__ZN27AMDRadeonX6000_AmdDalHelper14setCursorImageEPK21AmdFbCursorDescriptor", wrapSetCursorImage, orgSetCursorImage}
+        };
+        for (auto &req : r) {
+            if (!patcher.routeMultiple(index, &req, 1, address, size)) {
+                SYSLOG("ps5cyan", "Failed to route %s (%d)", req.symbol, patcher.getError());
+                patcher.clearError();
+            }
+        }
+        const mach_vm_address_t fn = findFunctionByString(address, size, kApplyPipeSplitFlags, sizeof(kApplyPipeSplitFlags));
+        KernelPatcher::RouteRequest splitReq {nullptr, wrapApplyPipeSplitFlags, orgApplyPipeSplitFlags};
+        splitReq.from = fn;
+        if (fn == 0 || !patcher.routeMultiple(index, &splitReq, 1)) {
+            SYSLOG("ps5cyan", "dcn20_validate_apply_pipe_split_flags not routed (%d)", patcher.getError());
+            patcher.clearError();
+        } else {
+            SYSLOG("ps5cyan", "Routed dcn20_validate_apply_pipe_split_flags at 0x%llx", static_cast<unsigned long long>(fn));
+        }
     }
 }
 
@@ -184,6 +332,7 @@ static void pluginStart()
     }
     PE_parse_boot_argn("-ps5vrambase", &gvmFbOffset, sizeof(gvmFbOffset));
     PE_parse_boot_argn("-ps5vramsize", &gvmFbSize, sizeof(gvmFbSize));
+    PE_parse_boot_argn("-ps5vrammc", &gvmFbBase, sizeof(gvmFbBase));
 
     lilu.onKextLoadForce(&kextHWServices, 1, onKextLoaded);
     lilu.onKextLoadForce(&kextHWLibs, 1, onKextLoaded);

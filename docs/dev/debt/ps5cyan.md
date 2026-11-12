@@ -49,6 +49,24 @@ Apple's stock `AMDRadeonX6000` driver assumes discrete VRAM starting at physical
 - `wrapPrepareVmInvalidate` (`__ZN26AMDRadeonX6000_AMDGFX10VMM26prepareVMInvalidateRequestEP25AMD_VM_INVALIDATE_REQUESTPK22AMD_VM_INVALIDATE_INFOb`): Adjusts page table addresses in invalidate requests.
 - **Orphaned Memory Reuse Cache**: In `wrapAccelHwInfo`, bit 28 (`0x10000000`) of `IOGraphicsAccelerator2` config is cleared. This forces freed VRAM to return immediately to the system instead of getting stuck in the orphaned-memory pool, preventing VRAM leaks and out-of-memory green screens.
 
+### Stage 5: DCN 2.0.1 HDMI Framebuffer Scanout and Pipe Split Suppression
+On the PS5 AMD Oberon APU, display scanout is handled by DCN 2.0.1 silicon, which presents two fundamental architectural divergence points from discrete Navi 10 (DCN 2.0):
+
+1. **Physical Pipe Topology & Split Suppression**:
+   - Discrete Navi 10 provides 6 hardware display pipes, whereas DCN 2.0.1 silicon provides only 4 display pipes (pipes 0–3).
+   - Stock Apple DAL display logic attempts MPC (Multi-Pipe Combiner) pipe splitting to distribute high-pixel-rate surfaces across two pipes, directing secondary pipe requests onto pipe 4 or pipe 5. Because pipe 5 does not exist on DCN 2.0.1, the secondary stream is lost, resulting in half-screen blanking or display corruption.
+   - `PS5Cyan` locates the internal, unexported DAL routine `dcn20_validate_apply_pipe_split_flags` in `AMDRadeonX6000Framebuffer` by searching for RIP-relative LEA references to its signature string (`"int dcn20_validate_apply_pipe_split_flags(struct dc *, struct dc_state *, int, int *, _Bool *)"`) and resolving backwards to its function prologue.
+   - `wrapApplyPipeSplitFlags` calls the original validation routine to compute the target voltage level, and subsequently clears `split[i] = 0` for all 6 pipe indices (`kMaxPipes = 6`). This suppresses MPC pipe splitting entirely and enforces 1 pipe per stream matching GOP firmware behavior.
+
+2. **UMA Scanout Address Translation**:
+   - Discrete Navi 10 employs a dedicated DCN_VM aperture where display HUBP reads addresses in the GPU MC aperture.
+   - Cyan Skillfish DCN 2.0.1 lacks a DCN_VM translation engine; its HUBP DMA read engines fetch display pixels directly from system physical memory (GDDR6 carveout).
+   - `PS5Cyan` intercepts three `AMDRadeonX6000_AmdDalHelper` routines in `AMDRadeonX6000Framebuffer`:
+     - `prepareDalDisplaySurfaceParameters` (`__ZN27AMDRadeonX6000_AmdDalHelper34prepareDalDisplaySurfaceParametersEPK16AmdFbDisplayPathP20AmdFalconUpdatePlane`): Scans the first `0x200` bytes of `AmdFalconUpdatePlane` and translates MC aperture addresses (`0xF400000000ULL`) to system physical GDDR6 carveout addresses (`gvmFbOffset`) so DAL registers receive UMA addresses.
+     - `updateSurfaceInfo` (`__ZN27AMDRadeonX6000_AmdDalHelper17updateSurfaceInfoEPK20AmdFalconUpdatePlanePK16AmdFbDisplayPath`): Scans and translates MC aperture addresses in the plane descriptor, executes the original DAL update routine, and restores original values afterwards to preserve driver state.
+     - `setCursorImage` (`__ZN27AMDRadeonX6000_AmdDalHelper14setCursorImageEPK21AmdFbCursorDescriptor`): Scans the first `0x80` bytes of the cursor descriptor, translates MC addresses to UMA carveout addresses, executes the original hardware cursor programming, and restores original descriptor values afterwards.
+   - `toUMA` and `translateWindow`: Validates candidate words against the MC aperture window `[gvmFbBase, gvmFbBase + gvmFbSize)` (default base `0xF400000000ULL`). Because the 64-bit MC aperture is far above normal scalar integers (width, height, stride, format), scalar fields are completely immune to false-positive translation.
+
 ### Boot Arguments
 - `-ps5cyanoff`: Disables the plugin completely.
 - `-ps5cyandbg`: Enables verbose SYSLOG kernel messages.
@@ -56,7 +74,9 @@ Apple's stock `AMDRadeonX6000` driver assumes discrete VRAM starting at physical
 - `-ps5vram=<size_in_mb>`: Sets the VRAM carve-out size in MiB (e.g. `512`, `1024`, `4096`).
 - `-ps5vrambase=0x...`: Overrides the physical carve-out base address.
 - `-ps5vramsize=0x...`: Overrides the carve-out size in bytes.
+- `-ps5vrammc=0x...`: Overrides the MC aperture base address (default `0xF400000000`).
 
 ## 3. Known Limitations & Technical Debt
 - **GC 10.1.3 Identification**: Navi 10 uses GC 10.1.0; Cyan Skillfish reports GC 10.1.3. Once claimed, `HWLibs` version check requires topology remapping.
-- **Display Scanout**: DCN 2.0.1 pipe 5 split elimination and HDMI scanout mapping pending (Stage 5).
+- **DCN DENTIST Clocks**: Stock DAL sizes DENTIST clock dividers assuming Navi 10's ~3.6 GHz VCO. For standard HDMI modes, GOP divider initialization carries the display; high refresh modes may require active DENTIST divider scaling.
+- **HDMI Audio**: Audio endpoint over HDMI/DP is not yet routed; system audio requires USB DAC or virtual audio device.
