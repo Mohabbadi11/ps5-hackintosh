@@ -28,6 +28,26 @@ static long blockHangReset(void *, void *)
     return 0;
 }
 
+static mach_vm_address_t orgAccelHwInfo = 0;
+
+static uint32_t wrapAccelHwInfo(void *device, uint8_t *out)
+{
+    uint32_t ret = FunctionCast(wrapAccelHwInfo, orgAccelHwInfo)(device, out);
+    if (out != nullptr) {
+        uint64_t *ref = reinterpret_cast<uint64_t *>(out + 0xC0);
+        uint64_t *sys = reinterpret_cast<uint64_t *>(out + 0xC8);
+        uint64_t *mem = reinterpret_cast<uint64_t *>(out + 0xD0);
+        uint64_t *cg  = reinterpret_cast<uint64_t *>(out + 0xD8);
+        if (*ref == 0) *ref = 10000;
+        if (*sys == 0) *sys = 200000;
+        if (*mem == 0) *mem = 175000;
+        if (*cg == 0)  *cg  = 10000;
+        if (ret == 0xE00002BC) ret = 0;
+        SYSLOG("ps5cyan", "Injected Metal device clocks (2000 MHz GFX, 1750 MHz Mem)");
+    }
+    return ret;
+}
+
 static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size)
 {
     if (index == kextHWServices.loadIndex) {
@@ -43,9 +63,10 @@ static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_a
         KernelPatcher::RouteRequest r[] = {
             {"__ZN30AMDRadeonX6000_AMDAccelChannel22resetHardwareAndReplayEv", blockHangReset},
             {"__ZN26AMDRadeonX6000_AMDHardware13resetHardwareEjPj", blockHangReset},
-            {"__ZN26AMDRadeonX6000_AMDHardware17dumpASICHangStateEb", blockHangReset}
+            {"__ZN26AMDRadeonX6000_AMDHardware17dumpASICHangStateEb", blockHangReset},
+            {"__ZN29AMDRadeonX6000_AMDAccelDevice15getHardwareInfoEP24_sAMD_GET_HW_INFO_VALUES", wrapAccelHwInfo, orgAccelHwInfo}
         };
-        patcher.routeMultiple(index, r, 3, address, size);
+        patcher.routeMultiple(index, r, 4, address, size);
     } else if (index == kextFB.loadIndex) {
         SYSLOG("ps5cyan", "AMDRadeonX6000Framebuffer loaded for 1002:13fc");
     }
