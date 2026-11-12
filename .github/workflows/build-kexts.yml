@@ -12,11 +12,7 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-14, macos-15]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -89,5 +85,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kexts-${{ matrix.os }}
+          name: kexts
           path: build/kexts/*.kext
