@@ -103,6 +103,19 @@ for e in cfg["Kernel"]["Add"]:
     stem = e["BundlePath"][:-5]
     if not (OUT / "OC/Kexts" / e["BundlePath"] / "Contents/MacOS" / stem).exists():
         e["ExecutablePath"] = ""
+# HDMI Audio (AppleGFXHDA): inject hda-gfx = "onboard-1" on GPU and HDMI audio endpoints under DeviceProperties
+if os.environ.get("HDMIAUDIO", "1") != "0":
+    if "DeviceProperties" not in cfg:
+        cfg["DeviceProperties"] = {"Add": {}, "Delete": {}}
+    if "Add" not in cfg["DeviceProperties"]:
+        cfg["DeviceProperties"]["Add"] = {}
+    for ep in (
+        "PciRoot(0x0)/Pci(0x8,0x1)/Pci(0x0,0x0)",
+        "PciRoot(0x0)/Pci(0x8,0x1)/Pci(0x0,0x1)",
+        "PciRoot(0x0)/Pci(0x1,0x0)",
+        "PciRoot(0x0)/Pci(0x1,0x1)",
+    ):
+        cfg["DeviceProperties"]["Add"].setdefault(ep, {})["hda-gfx"] = "onboard-1"
 cfg["UEFI"]["Drivers"] = [{"Arguments": "", "Comment": d, "Enabled": True, "LoadEarly": False, "Path": d} for d in drivers]
 cfg["UEFI"]["Output"]["Resolution"] = "2560x1440"
 cfg["UEFI"]["Output"]["ProvideConsoleGop"] = True

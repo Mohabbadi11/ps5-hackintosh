@@ -2,6 +2,10 @@
 #include <Headers/kern_patcher.hpp>
 #include <Headers/kern_util.hpp>
 #include <Headers/plugin_start.hpp>
+#include <IOKit/IOService.h>
+#include <libkern/c++/OSData.h>
+#include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSIterator.h>
 
 extern "C" boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_len);
 
@@ -30,6 +34,39 @@ static long blockHangReset(void *, void *)
     return 0;
 }
 
+static void publishHdaGfx()
+{
+    OSDictionary *matching = IOService::serviceMatching("IOPCIDevice");
+    if (matching == nullptr) return;
+    OSIterator *iter = IOService::getMatchingServices(matching);
+    matching->release();
+    if (iter == nullptr) return;
+    while (auto *obj = iter->getNextObject()) {
+        auto *entry = OSDynamicCast(IORegistryEntry, obj);
+        if (entry == nullptr) continue;
+        auto *vendor = OSDynamicCast(OSData, entry->getProperty("vendor-id"));
+        auto *device = OSDynamicCast(OSData, entry->getProperty("device-id"));
+        if (vendor != nullptr && device != nullptr && vendor->getLength() >= 2 && device->getLength() >= 2) {
+            uint16_t vid = *reinterpret_cast<const uint16_t *>(vendor->getBytesNoCopy());
+            uint16_t did = *reinterpret_cast<const uint16_t *>(device->getBytesNoCopy());
+            if (vid == 0x1002 && did == 0x13fc) {
+                entry->setProperty("hda-gfx", "onboard-1");
+                SYSLOG("ps5cyan", "Published hda-gfx on provider PCI device (1002:13fc)");
+            }
+        }
+        auto *classCode = OSDynamicCast(OSData, entry->getProperty("class-code"));
+        if (vendor != nullptr && classCode != nullptr && vendor->getLength() >= 2 && classCode->getLength() >= 3) {
+            uint16_t vid = *reinterpret_cast<const uint16_t *>(vendor->getBytesNoCopy());
+            const uint8_t *cc = reinterpret_cast<const uint8_t *>(classCode->getBytesNoCopy());
+            if (vid == 0x1002 && cc[1] == 0x03 && cc[2] == 0x04) {
+                entry->setProperty("hda-gfx", "onboard-1");
+                SYSLOG("ps5cyan", "Published hda-gfx on audio PCI device");
+            }
+        }
+    }
+    iter->release();
+}
+
 static mach_vm_address_t orgAccelHwInfo = 0;
 
 static uint32_t wrapAccelHwInfo(void *device, uint8_t *out)
@@ -49,6 +86,7 @@ static uint32_t wrapAccelHwInfo(void *device, uint8_t *out)
     }
     if (device != nullptr) {
         *reinterpret_cast<uint32_t *>(static_cast<uint8_t *>(device) + 0xC90) &= ~0x10000000U;
+        publishHdaGfx();
     }
     return ret;
 }
@@ -281,6 +319,7 @@ static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_a
         if (!patcher.routeMultiple(index, &r, 1, address, size)) SYSLOG("ps5cyan", "HWLibs::createPowerPlayInterface was not routed (%d)", patcher.getError());
     } else if (index == kextAccel.loadIndex) {
         SYSLOG("ps5cyan", "AMDRadeonX6000 accelerator loaded for 1002:13fc");
+        publishHdaGfx();
         KernelPatcher::RouteRequest r[] = {
             {"__ZN30AMDRadeonX6000_AMDAccelChannel22resetHardwareAndReplayEv", blockHangReset},
             {"__ZN26AMDRadeonX6000_AMDHardware13resetHardwareEjPj", blockHangReset},
@@ -296,6 +335,7 @@ static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_a
         patcher.routeMultiple(index, r, 10, address, size);
     } else if (index == kextFB.loadIndex) {
         SYSLOG("ps5cyan", "AMDRadeonX6000Framebuffer loaded for 1002:13fc");
+        publishHdaGfx();
         KernelPatcher::RouteRequest r[] = {
             {"__ZN27AMDRadeonX6000_AmdDalHelper34prepareDalDisplaySurfaceParametersEPK16AmdFbDisplayPathP20AmdFalconUpdatePlane", wrapPrepareSurface, orgPrepareSurface},
             {"__ZN27AMDRadeonX6000_AmdDalHelper17updateSurfaceInfoEPK20AmdFalconUpdatePlanePK16AmdFbDisplayPath", wrapUpdateSurfaceInfo, orgUpdateSurfaceInfo},

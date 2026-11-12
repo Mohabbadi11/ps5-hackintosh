@@ -79,4 +79,4 @@ On the PS5 AMD Oberon APU, display scanout is handled by DCN 2.0.1 silicon, whic
 ## 3. Known Limitations & Technical Debt
 - **GC 10.1.3 Identification**: Navi 10 uses GC 10.1.0; Cyan Skillfish reports GC 10.1.3. Once claimed, `HWLibs` version check requires topology remapping.
 - **DCN DENTIST Clocks**: Stock DAL sizes DENTIST clock dividers assuming Navi 10's ~3.6 GHz VCO. For standard HDMI modes, GOP divider initialization carries the display; high refresh modes may require active DENTIST divider scaling.
-- **HDMI Audio**: Audio endpoint over HDMI/DP is not yet routed; system audio requires USB DAC or virtual audio device.
+- **HDMI Audio**: Digital HDMI audio endpoint binding is managed via AppleGFXHDA with `hda-gfx` property injection (`onboard-1`) published on the GPU provider PCI device and OpenCore DeviceProperties. Detailed architecture, DualSense USB Audio fallback, and BlackHole loopback are documented in `docs/dev/debt/ps5audio.md`.
