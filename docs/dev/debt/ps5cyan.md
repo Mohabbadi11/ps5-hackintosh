@@ -47,7 +47,7 @@ Apple's stock `AMDRadeonX6000` driver assumes discrete VRAM starting at physical
 - `wrapUpdatePtesDma` (`__ZN29AMDRadeonX6000_AMDHWVMContext36updateContiguousPTEsWithDMAUsingAddrEyyyyy`): Translates SDMA contiguous PTE update packets.
 - `wrapFillMapProcess` (`__ZN35AMDRadeonX6000_AMDGFX10HIQHWChannel20fillMapProcessPacketEP19PM4_MES_MAP_PROCESSyyjjj`): Translates root page table addresses in HIQ `MAP_PROCESS` packets.
 - `wrapPrepareVmInvalidate` (`__ZN26AMDRadeonX6000_AMDGFX10VMM26prepareVMInvalidateRequestEP25AMD_VM_INVALIDATE_REQUESTPK22AMD_VM_INVALIDATE_INFOb`): Adjusts page table addresses in invalidate requests.
-- **Orphaned Memory Reuse Cache**: In `wrapAccelHwInfo`, bit 28 (`0x10000000`) of `IOGraphicsAccelerator2` config is cleared. This forces freed VRAM to return immediately to the system instead of getting stuck in the orphaned-memory pool, preventing VRAM leaks and out-of-memory green screens.
+- **Orphaned Memory Reuse Cache**: To protect against differing kernel structure layouts across macOS versions (Monterey vs Tahoe), clearing bit 28 (`0x10000000`) of `IOGraphicsAccelerator2` config at `device + 0xC90` is guarded behind the explicit boot argument `-ps5cyanreuseoff`. When enabled, it forces freed VRAM to return immediately to the system instead of lingering in the orphaned-memory pool.
 
 ### Stage 5: DCN 2.0.1 HDMI Framebuffer Scanout and Pipe Split Suppression
 On the PS5 AMD Oberon APU, display scanout is handled by DCN 2.0.1 silicon, which presents two fundamental architectural divergence points from discrete Navi 10 (DCN 2.0):
@@ -67,16 +67,41 @@ On the PS5 AMD Oberon APU, display scanout is handled by DCN 2.0.1 silicon, whic
      - `setCursorImage` (`__ZN27AMDRadeonX6000_AmdDalHelper14setCursorImageEPK21AmdFbCursorDescriptor`): Scans the first `0x80` bytes of the cursor descriptor, translates MC addresses to UMA carveout addresses, executes the original hardware cursor programming, and restores original descriptor values afterwards.
    - `toUMA` and `translateWindow`: Validates candidate words against the MC aperture window `[gvmFbBase, gvmFbBase + gvmFbSize)` (default base `0xF400000000ULL`). Because the 64-bit MC aperture is far above normal scalar integers (width, height, stride, format), scalar fields are completely immune to false-positive translation.
 
+### Hook Verification and Fault Isolation
+To ensure complete visibility and avoid silent hook failures, every route request in `kextAccel` and `kextFB` is individually evaluated and logged:
+- Each routine reports `Successfully routed accelerator hook <symbol>` on success.
+- Any unresolved symbol or failed detour reports `Failed to route accelerator hook <symbol> (<error_code>)` and clears the patcher error state to allow remaining hooks to proceed independently.
+- `publishHdaGfx` includes a one-time execution guard and strictly adheres to IOKit ownership semantics (`IOService::getMatchingServices` consumes the matching dictionary reference; manual over-release eliminated).
+
 ### Boot Arguments
 - `-ps5cyanoff`: Disables the plugin completely.
 - `-ps5cyandbg`: Enables verbose SYSLOG kernel messages.
 - `-ps5cyanbeta`: Allows loading on kernel versions outside Monterey.
+- `-ps5cyanreuseoff`: Enables clearing of the orphaned-memory pool reuse cache bit (0x10000000) at device + 0xC90.
 - `-ps5vram=<size_in_mb>`: Sets the VRAM carve-out size in MiB (e.g. `512`, `1024`, `4096`).
 - `-ps5vrambase=0x...`: Overrides the physical carve-out base address.
 - `-ps5vramsize=0x...`: Overrides the carve-out size in bytes.
 - `-ps5vrammc=0x...`: Overrides the MC aperture base address (default `0xF400000000`).
 
-## 3. Known Limitations & Technical Debt
+## 3. Status Categorization: Implemented vs. Hardware Verification Milestones
+
+### A. Implemented & CI-Verified (Compiler & Linker passing on real macOS 15 / Xcode 16.4)
+- **Personality Matching**: `IOPCIMatch = 0x13fc1002` with `IOProbeScore = 65535` across HWServices, Accel, and Framebuffer.
+- **PowerPlay Isolation**: Complete interception of `createPowerPlayInterface` returning 0, blocking SMU mailbox calls.
+- **ASIC Hang Reset Guard**: Interception of `resetHardwareAndReplay`, `resetHardware`, and `dumpASICHangState` returning 0.
+- **Metal Clock Injection**: `wrapAccelHwInfo` populating 100 MHz Ref, 2000 MHz GFX, 1750 MHz Mem, and clearing `0xE00002BC`.
+- **GVM Physical Translation Layer**: `getPdeValue`, `getPteValue`, `decodePte`, `updateContiguousPTEsWithDMAUsingAddr`, `fillMapProcessPacket`, and `prepareVMInvalidateRequest` translating VRAM addresses to physical carveout (`0x470000000 - size`).
+- **DCN 2.0.1 Pipe Split Suppression**: Prologue back-trace pattern match resolving `dcn20_validate_apply_pipe_split_flags` and clearing `split[i] = 0`.
+- **UMA Scanout Address Translation**: Intercepting plane and cursor descriptors in `AMDRadeonX6000_AmdDalHelper` to map MC addresses to physical carveout.
+- **Audio Device Pairing**: `publishHdaGfx()` dynamic injection and OpenCore `DeviceProperties` injection of `hda-gfx = onboard-1`.
+
+### B. Hardware Verification Milestones (Requiring Bare-Metal PS5 Console Execution)
+- **Milestone 1 (Metal 3 Shader Execution)**: Booting to macOS desktop, verifying `MTLDevice` instantiation without WindowServer fallback, running Metal compute/render shaders, and measuring sustained stability.
+- **Milestone 2 (DCN 2.0.1 Hardware Scanout Lock)**: Verifying physical HDMI display synchronization at 1080p/4K@60Hz on a TV screen without tearing or pipe timing faults.
+- **Milestone 3 (AppleGFXHDA Audio Packet Playback)**: Confirming television audio output recognition in macOS Sound preferences and audio stream stability through HDMI.
+- **Milestone 4 (DualSense USB Audio Enumeration)**: Verifying physical controller 3.5mm TRRS audio output and microphone capture via native `AppleUSBAudio`.
+
+## 4. Known Limitations & Technical Debt
 - **GC 10.1.3 Identification**: Navi 10 uses GC 10.1.0; Cyan Skillfish reports GC 10.1.3. Once claimed, `HWLibs` version check requires topology remapping.
 - **DCN DENTIST Clocks**: Stock DAL sizes DENTIST clock dividers assuming Navi 10's ~3.6 GHz VCO. For standard HDMI modes, GOP divider initialization carries the display; high refresh modes may require active DENTIST divider scaling.
 - **HDMI Audio**: Digital HDMI audio endpoint binding is managed via AppleGFXHDA with `hda-gfx` property injection (`onboard-1`) published on the GPU provider PCI device and OpenCore DeviceProperties. Detailed architecture, DualSense USB Audio fallback, and BlackHole loopback are documented in `docs/dev/debt/ps5audio.md`.

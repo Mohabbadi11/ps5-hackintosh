@@ -34,13 +34,16 @@ static long blockHangReset(void *, void *)
     return 0;
 }
 
+static bool publishedHdaGfx = false;
+
 static void publishHdaGfx()
 {
+    if (publishedHdaGfx) return;
     OSDictionary *matching = IOService::serviceMatching("IOPCIDevice");
     if (matching == nullptr) return;
     OSIterator *iter = IOService::getMatchingServices(matching);
-    matching->release();
     if (iter == nullptr) return;
+    publishedHdaGfx = true;
     while (auto *obj = iter->getNextObject()) {
         auto *entry = OSDynamicCast(IORegistryEntry, obj);
         if (entry == nullptr) continue;
@@ -85,7 +88,11 @@ static uint32_t wrapAccelHwInfo(void *device, uint8_t *out)
         SYSLOG("ps5cyan", "Injected Metal device clocks (2000 MHz GFX, 1750 MHz Mem)");
     }
     if (device != nullptr) {
-        *reinterpret_cast<uint32_t *>(static_cast<uint8_t *>(device) + 0xC90) &= ~0x10000000U;
+        bool disableReuse = false;
+        PE_parse_boot_argn("-ps5cyanreuseoff", &disableReuse, sizeof(disableReuse));
+        if (disableReuse) {
+            *reinterpret_cast<uint32_t *>(static_cast<uint8_t *>(device) + 0xC90) &= ~0x10000000U;
+        }
         publishHdaGfx();
     }
     return ret;
@@ -332,7 +339,14 @@ static void onKextLoaded(void *, KernelPatcher &patcher, size_t index, mach_vm_a
             {"__ZN29AMDRadeonX6000_AMDHWVMContext36updateContiguousPTEsWithDMAUsingAddrEyyyyy", wrapUpdatePtesDma, orgUpdatePtesDma},
             {"__ZN35AMDRadeonX6000_AMDGFX10HIQHWChannel20fillMapProcessPacketEP19PM4_MES_MAP_PROCESSyyjjj", wrapFillMapProcess, orgFillMapProcess}
         };
-        patcher.routeMultiple(index, r, 10, address, size);
+        for (auto &req : r) {
+            if (!patcher.routeMultiple(index, &req, 1, address, size)) {
+                SYSLOG("ps5cyan", "Failed to route accelerator hook %s (%d)", req.symbol, patcher.getError());
+                patcher.clearError();
+            } else {
+                SYSLOG("ps5cyan", "Successfully routed accelerator hook %s", req.symbol);
+            }
+        }
     } else if (index == kextFB.loadIndex) {
         SYSLOG("ps5cyan", "AMDRadeonX6000Framebuffer loaded for 1002:13fc");
         publishHdaGfx();
